@@ -73,9 +73,9 @@ scene.add(createLaneFlags(course));
 
 const boardMesh = createBoardMesh(); scene.add(boardMesh);
 loadBoardModel(boardMesh, `${BASE}models/board/sirocco_dune156.glb`);
-// Test: ?lodge puts the cabin on the summit pad and starts you inside it.
+// The cabin (a test for now) sits on the summit pad and you start inside it. ?nolodge leaves it out.
 let lodge = null;
-if (params.has('lodge')) {
+if (!params.has('nolodge')) {
   import('./lodge-test.js').then(m => m.placeLodge({ scene, course, url: `${BASE}models/lodge/cabin-v3.glb` }))
     .then(l => { lodge = l; if (mode === 'summit') placeOnSummit(); }).catch(error => console.warn('lodge', error));
 }
