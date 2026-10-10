@@ -419,7 +419,9 @@ export function createSky(look = LOOK) {
   });
   const sky = new THREE.Mesh(new THREE.SphereGeometry(1, 48, 24), material);
   sky.name = 'Sky'; sky.frustumCulled = false; sky.renderOrder = -10;
-  sky.onBeforeRender = (r, s, camera) => { sky.position.setFromMatrixPosition(camera.matrixWorld); };
+  // Follow the eye. The renderer has already updated world matrices by the time this runs, so the new position has to be pushed through
+  // by hand: otherwise the sky trails the camera by a frame, and the first frame after a teleport (a respawn, a jump to a checkpoint) is black.
+  sky.onBeforeRender = (r, s, camera) => { sky.position.setFromMatrixPosition(camera.matrixWorld); sky.updateMatrixWorld(true); };
   sky.scale.setScalar(100);
   return sky;
 }

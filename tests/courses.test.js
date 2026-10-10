@@ -26,12 +26,31 @@ for (const def of COURSES) {
   });
 
   test(`${name} the ground has no seams anywhere near the run`, () => {
-    const xs = course.points.map(p => p[0]), zs = course.points.map(p => p[1]);
+    // Rows 13 m apart across the run, each scanned every half metre, but only where the row passes within `reach` of the centre line: a long
+    // diagonal run has a huge bounding box that is mostly empty dunes, and scanning all of it takes minutes. Per row, the stretches of x
+    // within reach of the line are merged, and each height is computed once and reused for the next step.
+    const reach = 200, rowStep = 13, colStep = 0.5;
+    const zs = course.points.map(p => p[1]);
     let worst = 0, at = null;
-    for (let z = Math.max(...zs) + 150; z > Math.min(...zs) - 150; z -= 13) {
-      for (let x = Math.min(...xs) - 150; x < Math.max(...xs) + 150; x += 0.5) {
-        const g = Math.abs(course.heightAt(x + 0.5, z) - course.heightAt(x, z)) / 0.5;
-        if (g > worst) { worst = g; at = [x, z]; }
+    for (let z = Math.max(...zs) + reach; z > Math.min(...zs) - reach; z -= rowStep) {
+      const spans = [];
+      for (const [px, pz] of course.points) {
+        const dz = Math.abs(pz - z);
+        if (dz < reach) { const half = Math.sqrt(reach * reach - dz * dz); spans.push([px - half, px + half]); }
+      }
+      spans.sort((a, b) => a[0] - b[0]);
+      const merged = [];
+      for (const span of spans) {
+        const last = merged[merged.length - 1];
+        if (last && span[0] <= last[1]) last[1] = Math.max(last[1], span[1]); else merged.push([span[0], span[1]]);
+      }
+      for (const [x0, x1] of merged) {
+        let before = course.heightAt(x0, z);
+        for (let x = x0 + colStep; x <= x1; x += colStep) {
+          const here = course.heightAt(x, z), g = Math.abs(here - before) / colStep;
+          if (g > worst) { worst = g; at = [x - colStep, z]; }
+          before = here;
+        }
       }
     }
     assert.ok(worst < 6, `steepest step ${worst.toFixed(2)} at ${at}`);

@@ -2,6 +2,7 @@
 import ridgeline from './ridgeline.js';
 import vertigo from './vertigo.js';
 import nocturne from './nocturne.js';
+import mirage from './mirage.js';
 
-export const COURSES = [ridgeline, vertigo, nocturne];
+export const COURSES = [ridgeline, vertigo, nocturne, mirage];
 export const courseById = id => COURSES.find(c => c.id === id) || COURSES[0];
