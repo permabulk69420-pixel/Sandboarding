@@ -32,7 +32,7 @@ const PROFILE = descent(675, [
 ]);
 
 const WIDTH = [[0, 26], [44, 22], [77, 15], [1230, 14], [1330, 11], [1650, 11], [1670, 9], [2060, 9], [2100, 22], [3080, 22], [3120, 20], [3340, 20], [3460, 30], [3540, 30]];
-const RIDGE = [[0, 3], [66, 6], [143, 12], [1230, 12], [1330, 12], [1650, 12], [1690, 18], [2050, 18], [2100, 9], [3150, 9], [3200, 17], [3330, 17], [3380, 9], [3540, 9]];
+const RIDGE = [[0, 3], [66, 6], [143, 12], [1230, 12], [1330, 12], [1650, 12], [1690, 18], [2050, 18], [2100, 9], [3150, 9], [3200, 17], [3330, 17], [3380, 9], [3440, 6], [3554, 0.4]]; // the walls ease away over the runout, so the lane opens onto the plain instead of ending in a cliff
 
 // Whoops: low rollers on the breather after the gate. (None on the leap straight: every landing costs speed, and the leap wants it all.)
 const ROLLERS = [
