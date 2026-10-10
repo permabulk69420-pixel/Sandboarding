@@ -37,3 +37,14 @@ export function angleDelta(a, b) {
   if (d < -Math.PI) d += TAU;
   return d;
 }
+
+// Axis snapping for a stick: pushed within `degrees` of straight left/right it's purely left/right, within `degrees` of straight up/down
+// it's purely up/down; only real diagonals give both. Stops a sideways push from leaking a little of the other axis (a spin from picking
+// up a bit of flip). Returns [x, y].
+export function axisSnap(x, y, degrees = 20) {
+  if (x === 0 || y === 0) return [x, y];
+  const angle = Math.atan2(Math.abs(y), Math.abs(x)) * 180 / Math.PI; // 0 = straight sideways, 90 = straight up/down
+  if (angle < degrees) return [x, 0];
+  if (angle > 90 - degrees) return [0, y];
+  return [x, y];
+}

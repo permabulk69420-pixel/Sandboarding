@@ -1,4 +1,6 @@
-import { stickAxis, clamp } from './math.js';
+import { stickAxis, clamp, axisSnap } from './math.js';
+
+export const STICK_SNAP = 20; // degrees: see axisSnap (riding only; walking keeps its diagonals)
 
 // One place that turns controllers (or the keyboard) into game intent. Buttons are xr-standard indices on Quest Touch:
 // 0 trigger, 1 grip, 3 thumbstick click, 4 A/X, 5 B/Y. `pressed` flags are true only on the frame a button goes down.
@@ -31,8 +33,9 @@ export function createInput() {
         const sx = stickAxis(axes[ax] || 0), sy = stickAxis(axes[ax + 1] || 0);
         const trig = b[BTN.trigger]?.value ?? 0;
         out.brake = Math.max(out.brake, trig > 0.1 ? trig : 0);
-        if (Math.abs(sx) > Math.abs(out.steer)) out.steer = sx;
-        if (Math.abs(sy) > Math.abs(out.pitch)) out.pitch = sy;
+        const [rx, ry] = axisSnap(sx, sy, STICK_SNAP); // riding: a sideways push is a pure spin/carve, a push up or down a pure flip
+        if (Math.abs(rx) > Math.abs(out.steer)) out.steer = rx;
+        if (Math.abs(ry) > Math.abs(out.pitch)) out.pitch = ry;
         if (source.handedness === 'left') {
           out.moveX = sx; out.moveZ = sy;
           out.x = edge('x', Boolean(b[BTN.primary]?.pressed)); out.y = edge('y', Boolean(b[BTN.secondary]?.pressed));

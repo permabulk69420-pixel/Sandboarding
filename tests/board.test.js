@@ -164,3 +164,13 @@ test('landing a bit over-rotated is a heavy landing that costs speed', async () 
   assert.equal(l.type, 'land', `tilt ${(l.tilt * 57.3).toFixed(0)} deg`);
   assert.ok(l.heavy, `tilt ${(l.tilt * 57.3).toFixed(0)} deg`);
 });
+
+test('stick axis snapping: near-sideways is a pure spin, near-vertical a pure flip, diagonals keep both', async () => {
+  const { axisSnap } = await import('../src/math.js');
+  const at = deg => [Math.cos(deg * Math.PI / 180), Math.sin(deg * Math.PI / 180)];
+  assert.equal(axisSnap(...at(15), 20)[1], 0);    // 15 degrees off sideways: no flip
+  assert.equal(axisSnap(...at(78), 20)[0], 0);    // 12 degrees off vertical: no spin
+  const [dx, dy] = axisSnap(...at(45), 20);
+  assert.ok(dx > 0.6 && dy > 0.6);                 // a real diagonal does both
+  assert.deepEqual(axisSnap(-1, 0, 20), [-1, 0]);
+});
