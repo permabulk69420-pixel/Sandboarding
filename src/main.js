@@ -428,4 +428,4 @@ if (params.has('fly')) { // ?fly=x,y,z,yaw,pitch: a free camera for looking at t
 }
 renderer.setAnimationLoop(frame);
 if (params.has('grabtest')) import('./dev-grab-test.js').then(m => m.grabTest({ params, hands, rig, camera, grab, boardMesh, board: () => board, freeze: () => { frozen = true; } }));
-window.__sand = { course, get board() { return board; }, get mode() { return mode; }, camera, rig, BOARD };
+window.__sand = { course, look, scene, renderer, get board() { return board; }, get mode() { return mode; }, camera, rig, BOARD }; // dev: for screenshots and tuning a look live
