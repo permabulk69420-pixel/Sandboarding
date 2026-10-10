@@ -35,7 +35,10 @@ renderer.xr.enabled = true;
 renderer.xr.setReferenceSpaceType('local-floor');
 
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(72, innerWidth / innerHeight, 0.05, 6000);
+// Near and far planes as tight as the world allows: the depth buffer's precision depends mostly on the near plane, and with it at 5 cm
+// distant slopes and the sunk coarse terrain flickered through each other. Past LOOK.fogEnd everything is haze anyway (the sky below
+// the horizon is the same colour), so nothing visible is lost beyond 3.6 km. WebXR uses these planes too.
+const camera = new THREE.PerspectiveCamera(72, innerWidth / innerHeight, 0.1, 3600);
 const rig = new THREE.Group(); rig.name = 'Player rig';
 rig.add(camera); scene.add(rig);
 camera.position.set(0, RUN.eye, 0);
