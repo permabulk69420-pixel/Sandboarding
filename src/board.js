@@ -24,7 +24,9 @@ export const BOARD = Object.freeze({
   steerResponse: 9, // per second: how quickly the board follows the stick
   brakeFriction: 0.55, // extra friction at full brake (dragging the tail)
   brakeGripLoss: 0.5, // the edge holds less (you skid) while braking
-  ollie: 4.3, // metres per second off the ground
+  ollie: 4.3, // metres per second off the ground for a normal pop
+  ollieTap: 0.55, // a quick tap of the button pops this share of it...
+  ollieFull: 1.35, // ...a full charge this share
   launchGap: 0.012, // metres above the sand before the ground counts as gone (a little give so tiny ripples don't hop you)
   airTurn: 2.8, // radians per second of spin in the air
   maxSpeed: 30,
@@ -40,16 +42,26 @@ export function createBoardState({ x = 0, y = 0, z = 0, yaw = 0, speed = 0 } = {
 
 export const speedOf = st => Math.hypot(st.vx, st.vy, st.vz);
 
-// input: { steer: -1..1 (positive = right), brake: 0..1, tuck: 0..1, ollie: bool (edge) }
+// input: { steer: -1..1 (positive = right), brake: 0..1, tuck: 0..1, ollie: false, or the jump's charge 0..1 on the frame you release it }
 // ground: { heightAt(x, z), normalAt(x, z, out) }
 // Returns the state (mutated). `events` collects { type: 'launch' | 'land' | 'bail', ... } for sound and haptics; the caller clears it.
 export function stepBoard(st, input, ground, dt) {
   const steps = Math.max(1, Math.ceil(dt / BOARD.substep));
   const h = dt / steps;
-  let ollie = Boolean(input.ollie);
+  let ollie = input.ollie === true ? 0.6 : (typeof input.ollie === 'number' ? clamp(input.ollie, 0, 1) : false);
   for (let k = 0; k < steps; k += 1) { substep(st, input, ground, h, ollie); ollie = false; }
   return st;
 }
+
+// Steering from leaning: how far your head has moved sideways over the board (metres, positive = right) to -1..1, with a small dead zone
+// so standing naturally doesn't steer.
+export const LEAN = Object.freeze({ dead: 0.035, full: 0.2 });
+export function leanSteer(offset) {
+  const a = Math.abs(offset);
+  if (a <= LEAN.dead) return 0;
+  return Math.sign(offset) * Math.min(1, (a - LEAN.dead) / (LEAN.full - LEAN.dead));
+}
+
 
 const n = { x: 0, y: 1, z: 0 };
 
@@ -100,8 +112,8 @@ function substep(st, input, ground, dt, ollie) {
       const scale = s2 / speed; st.vx *= scale; st.vy *= scale; st.vz *= scale;
     }
 
-    if (ollie) {
-      const pop = BOARD.ollie;
+    if (ollie !== false) {
+      const pop = BOARD.ollie * mix(BOARD.ollieTap, BOARD.ollieFull, ollie);
       st.vx += n.x * pop; st.vy += n.y * pop; st.vz += n.z * pop;
       st.grounded = false; st.air = 0; st.events.push({ type: 'launch', ollie: true, speed: speedOf(st) });
     }

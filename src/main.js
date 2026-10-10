@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import './style.css';
 import { createCourse } from './course.js';
-import { createBoardState, stepBoard, speedOf, BOARD } from './board.js';
+import { createBoardState, stepBoard, speedOf, leanSteer, BOARD } from './board.js';
 import { clamp, angleDelta } from './math.js';
 import { createSky, createTerrain, LOOK } from './world.js';
 import { createGate, createLaneFlags, createBoardMesh, loadBoardModel } from './props.js';
@@ -18,7 +18,7 @@ import { pulseHaptics } from './haptics.js';
 
 const params = new URLSearchParams(location.search);
 const BASE = import.meta.env?.BASE_URL ?? './';
-const RUN = Object.freeze({ name: 'Ridgeline', checkpointEvery: 120, countdown: 3, walkSpeed: 3.2, turnSpeed: 2.2, eye: 1.65 });
+const RUN = Object.freeze({ chargeTime: 0.6, crouchDrop: 0.45, name: 'Ridgeline', checkpointEvery: 120, countdown: 3, walkSpeed: 3.2, turnSpeed: 2.2, eye: 1.65 });
 
 // ---------------------------------------------------------------- renderer, scene, player rig
 const canvas = document.getElementById('world');
@@ -87,6 +87,7 @@ let mode = 'summit'; // summit | countdown | ride | finished (and fly, a dev cam
 let board = createBoardState();
 let runTime = 0, countdown = 0, finishedFor = 0, lastCheckpoint = course.startS, result = null;
 let rigYaw = 0, headOffset = new THREE.Vector2(), standHeight = RUN.eye, rumbleClock = 0, sprayClock = 0, lostFor = 0;
+let charge = 0, chargeClock = 0, crouched = false, crouchAmount = 0; // the jump's wind-up (0..1) and the right-stick crouch
 let fading = null; // { t, half, action }
 const autopilot = params.has('auto');
 
@@ -113,6 +114,7 @@ function dropIn() {
   // Keep your real feet over the board: remember where your head is in the play space now.
   headOffset.set(renderer.xr.isPresenting ? camera.position.x : 0, renderer.xr.isPresenting ? camera.position.z : 0);
   standHeight = renderer.xr.isPresenting ? Math.max(1.2, camera.position.y) : RUN.eye;
+  charge = 0; crouched = false; crouchAmount = 0;
   mode = 'countdown'; countdown = RUN.countdown; runTime = 0; lastCheckpoint = course.startS; result = null; lostFor = 0;
   startSign.mesh.visible = false; finishSign.mesh.visible = false;
   audio.chime(false);
@@ -197,7 +199,7 @@ function frame(time) {
   lastTime = time;
   const session = renderer.xr.isPresenting ? renderer.xr.getSession() : null;
   const read = input.read(session); // always read, so button edges stay in step
-  const inp = playing && !fading ? read : { moveX: 0, moveZ: 0, turn: 0, steer: 0, brake: 0, tuckKey: 0, a: false, b: false, y: false };
+  const inp = playing && !fading ? read : { moveX: 0, moveZ: 0, turn: 0, steer: 0, brake: 0, tuckKey: 0, a: false, b: false, y: false, aHeld: false, aReleased: false, crouchToggle: false };
 
   // Fades: out, act, back in.
   if (fading) {
@@ -231,14 +233,29 @@ function frame(time) {
     if (mode === 'ride' || mode === 'finished') {
       // Intent: steer, brake, tuck (crouch for real in VR), hop.
       const loc = course.locate(board.x, board.z);
-      let steer = inp.steer, brake = inp.brake;
+      // Steer with the stick and by leaning your head left or right over the board; both add up.
+      const lean = session ? leanSteer(camera.position.x - headOffset.x) : 0;
+      let steer = clamp(inp.steer + lean, -1, 1), brake = inp.brake;
       if (autopilot) {
         const aim = course.pointAt(Math.min(course.length, loc.s + 14));
         steer = clamp(-angleDelta(board.yaw, Math.atan2(-(aim.x - board.x), -(aim.z - board.z))) * 2.5, -1, 1);
       }
-      const tuck = session ? clamp((standHeight - camera.position.y - 0.08) / 0.3, 0, 1) : inp.tuckKey;
+      // Crouch: squat for real, or click the right stick to toggle it. Either way you tuck for speed.
+      if (inp.crouchToggle) crouched = !crouched;
+      crouchAmount += ((crouched ? 1 : 0) - crouchAmount) * Math.min(1, dt * 8);
+      const squat = session ? clamp((standHeight - camera.position.y - 0.08) / 0.3, 0, 1) : 0;
+      const tuck = Math.max(squat, crouchAmount, inp.tuckKey);
       if (mode === 'finished') brake = Math.max(brake, 0.7);
-      stepBoard(board, { steer, brake, tuck, ollie: inp.a && board.grounded && mode === 'ride' }, course, dt);
+      // Jump: hold A to wind it up (the right controller rumbles harder as it builds), let go to pop. A tap is a small hop.
+      let ollie = false;
+      if (mode === 'ride' && board.grounded && inp.aHeld) {
+        charge = Math.min(1, charge + dt / RUN.chargeTime);
+        chargeClock += dt;
+        if (chargeClock > 0.07) { chargeClock = 0; const right = hands.states.find(h => h.handedness === 'right'); pulseHaptics(right, 0.06 + 0.35 * charge, 50); }
+      }
+      if (inp.aReleased && charge > 0) { if (board.grounded && mode === 'ride') ollie = charge; charge = 0; }
+      if (!board.grounded) charge = 0;
+      stepBoard(board, { steer, brake, tuck, ollie }, course, dt);
       const speed = speedOf(board);
 
       for (const e of board.events) {
@@ -296,7 +313,7 @@ function frame(time) {
     rigYaw += angleDelta(rigYaw, board.yaw) * Math.min(1, dt * 10);
     rig.rotation.y = rigYaw;
     const c = Math.cos(rigYaw), s = Math.sin(rigYaw);
-    rig.position.set(board.x - (c * headOffset.x + s * headOffset.y), board.y + 0.04, board.z - (-s * headOffset.x + c * headOffset.y));
+    rig.position.set(board.x - (c * headOffset.x + s * headOffset.y), board.y + 0.04 - RUN.crouchDrop * crouchAmount, board.z - (-s * headOffset.x + c * headOffset.y));
   }
 
   if (!session && playing) hudText.textContent = statusLines().map(l => l.text).join('   ·   ');

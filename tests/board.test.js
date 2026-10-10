@@ -106,3 +106,23 @@ test('standing across the slope with no speed, the edge holds you still', () => 
   for (let t = 0; t < 3; t += 1 / 72) { stepBoard(st, {}, course, 1 / 72); st.events.length = 0; }
   assert.ok(speedOf(st) < 0.5, `slid at ${speedOf(st).toFixed(2)} m/s`);
 });
+
+test('a charged jump goes higher than a tap', () => {
+  const ground = { heightAt: () => 0, normalAt: (x, z, out) => { out.x = 0; out.y = 1; out.z = 0; return out; } };
+  const peak = charge => {
+    const st = createBoardState({ speed: 5 });
+    stepBoard(st, { ollie: charge }, ground, 1 / 72);
+    let top = 0; while (!st.grounded) { stepBoard(st, {}, ground, 1 / 72); top = Math.max(top, st.y); }
+    return top;
+  };
+  const tap = peak(0.02), full = peak(1);
+  assert.ok(tap > 0.1 && tap < 0.45, `tap ${tap}`);
+  assert.ok(full > 1.4 && full < 2.2, `full ${full}`);
+});
+
+test('leaning steers past a small dead zone, up to full lock', async () => {
+  const { leanSteer } = await import('../src/board.js');
+  assert.equal(leanSteer(0.02), 0);
+  assert.ok(leanSteer(0.1) > 0.2 && leanSteer(0.1) < 0.6);
+  assert.equal(leanSteer(-0.4), -1);
+});

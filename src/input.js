@@ -18,6 +18,8 @@ export function createInput() {
     const out = {
       moveX: 0, moveZ: 0, turn: 0, steer: 0, brake: 0, tuckKey: 0,
       a: false, b: false, x: false, y: false, // right A, right B, left X, left Y (edges)
+      aHeld: false, aReleased: false, // A held down, and the frame it's let go (the charged jump)
+      crouchToggle: false, // right thumbstick click (edge)
       any: false,
     };
     if (session) {
@@ -34,7 +36,10 @@ export function createInput() {
           out.x = edge('x', Boolean(b[BTN.primary]?.pressed)); out.y = edge('y', Boolean(b[BTN.secondary]?.pressed));
         } else if (source.handedness === 'right') {
           out.turn = sx;
-          out.a = edge('a', Boolean(b[BTN.primary]?.pressed)); out.b = edge('b', Boolean(b[BTN.secondary]?.pressed));
+          const aDown = Boolean(b[BTN.primary]?.pressed);
+          out.a = edge('a', aDown); out.aHeld = aDown; out.aReleased = edge('a-up', !aDown);
+          out.b = edge('b', Boolean(b[BTN.secondary]?.pressed));
+          out.crouchToggle = edge('rs', Boolean(b[BTN.stick]?.pressed));
         }
       }
     } else {
@@ -45,7 +50,9 @@ export function createInput() {
       out.steer = clamp(Number(k('KeyD') || k('ArrowRight')) - Number(k('KeyA') || k('ArrowLeft')), -1, 1);
       out.brake = Number(k('KeyS') || k('ArrowDown'));
       out.tuckKey = Number(k('KeyW') || k('ArrowUp') || k('ShiftLeft'));
-      out.a = edge('a', k('Space') || k('Enter'));
+      const aDown = k('Space') || k('Enter');
+      out.a = edge('a', aDown); out.aHeld = aDown; out.aReleased = edge('a-up', !aDown);
+      out.crouchToggle = edge('rs', k('KeyC'));
       out.b = edge('b', k('KeyR'));
       out.y = edge('y', k('KeyT'));
     }
