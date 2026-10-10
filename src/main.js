@@ -344,8 +344,8 @@ function frame(time) {
     // Feet: the hips (above the board) minus your body, turned with you. Your real head's spot in the play space stays over the board.
     lift.set(headOffset.x, HIPS, headOffset.y).applyQuaternion(rig.quaternion);
     rig.position.set(board.x, board.y + HIPS + 0.04, board.z).sub(lift);
-    // A little duck while you wind up a jump: eases down as it charges, springs back up quickly when you pop.
-    dip += (RUN.chargeDip * charge - dip) * Math.min(1, dt * (charge > 0 ? 10 : 18));
+    // A little duck while you wind up a jump: drops the moment you press A, springs back up the moment you pop.
+    dip += ((charge > 0 ? RUN.chargeDip : 0) - dip) * Math.min(1, dt * 35);
     rig.position.y -= RUN.crouchDrop * crouchAmount + dip;
     feet.set(0, HIPS, 0).applyQuaternion(rig.quaternion);
     boardMesh.position.set(board.x, board.y + HIPS + 0.005, board.z).sub(feet);
