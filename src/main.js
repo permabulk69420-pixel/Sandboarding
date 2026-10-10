@@ -70,6 +70,12 @@ scene.add(createLaneFlags(course));
 
 const boardMesh = createBoardMesh(); scene.add(boardMesh);
 loadBoardModel(boardMesh, `${BASE}models/board/sirocco_dune156.glb`);
+// Test: ?lodge puts the cabin on the summit pad and starts you inside it.
+let lodge = null;
+if (params.has('lodge')) {
+  import('./lodge-test.js').then(m => m.placeLodge({ scene, course, url: `${BASE}models/lodge/cabin-v3.glb` }))
+    .then(l => { lodge = l; if (mode === 'summit') placeOnSummit(); }).catch(error => console.warn('lodge', error));
+}
 const puffs = createSandPuffs({ scene, sun: sunUniform, heightAt: course.heightAt });
 const audio = createRideAudio();
 const input = createInput();
@@ -101,9 +107,12 @@ let dip = 0; // the little duck while winding up a jump, eased
 let fading = null; // { t, half, action }
 const autopilot = params.has('auto');
 
+const groundAt = (x, z) => lodge?.floorAt(x, z) ?? course.heightAt(x, z); // on foot: the cabin's floor where there is one
+
 function placeOnSummit() {
   const p = course.pointAt(Math.max(0, course.startS - 26));
-  rig.position.set(p.x, course.heightAt(p.x, p.z), p.z);
+  if (lodge) { p.x = lodge.spawn.x; p.z = lodge.spawn.z; p.yaw = lodge.spawn.yaw; }
+  rig.position.set(p.x, groundAt(p.x, p.z), p.z);
   rigYaw = p.yaw; rig.rotation.set(0, rigYaw, 0);
   boardMesh.visible = true;
   const g = course.pointAt(course.startS - 2.5); // the board waits by the gate
@@ -232,7 +241,7 @@ function frame(time) {
     tmpR.set(-tmpF.z, 0, tmpF.x);
     const mx = inp.moveX, mz = inp.moveZ;
     rig.position.addScaledVector(tmpF, -mz * RUN.walkSpeed * dt).addScaledVector(tmpR, mx * RUN.walkSpeed * dt);
-    rig.position.y = course.heightAt(rig.position.x, rig.position.z);
+    rig.position.y = groundAt(rig.position.x, rig.position.z);
     rigYaw -= inp.turn * RUN.turnSpeed * dt; // smooth turning
     rig.rotation.set(0, rigYaw, 0); // level (clears any flip left over from a run)
     const g = course.pointAt(course.startS);
