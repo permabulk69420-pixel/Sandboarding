@@ -1,0 +1,293 @@
+// The first run: a long sandboard course down a desert mountain.
+//
+// The course is a centre line (a smooth curve through hand-placed points) with an elevation profile along it. The ground is the lower of
+// two shapes, so it is continuous everywhere:
+//  - the CHANNEL: the lowest of one shaped surface per stretch of centre line. Each stretch carves a dished lane and rises into walls on
+//    both sides that keep climbing (so a stretch only matters near itself). Features along the lane (rollers, kickers, a narrow gully,
+//    banked turns) are part of each stretch's shape.
+//  - the MOUNTAIN: a smooth landform that follows the run's height plus a ridge, and falls away on every side to a dune plain.
+// Near the run the channel is lower, so you ride in a lane between ridges; away from it the mountain is, so the summit is a real top
+// with the desert spread out below. Pure maths, no three.js, so it is tested in node.
+
+import { clamp, mix, smooth, fbm, noise } from './math.js';
+
+// Hand-placed centre line, metres. The run heads roughly north (-z) from the summit.
+const CONTROL = [
+  [0, 40], [0, 0], [0, -50], [12, -120], [42, -190], [46, -260], [18, -320], [-28, -380], [-46, -450],
+  [-24, -515], [18, -570], [44, -640], [36, -710], [8, -770], [0, -830], [0, -880], [0, -930],
+];
+
+// Elevation along the centre line (arc length s -> height). Interpolated with a monotone cubic so slopes never overshoot.
+// Summit pad, a cruisy first pitch, a steep pitch, rollers, the first kicker, a gully, a bigger kicker, a long fast finish, then a runout
+// that climbs gently to bring you to a stop.
+const PROFILE = [
+  [0, 160], [48, 159], [70, 156], [150, 138], [240, 112], [320, 84], [360, 78], [440, 66], [500, 52],
+  [580, 38], [660, 22], [740, 9], [800, 2], [850, 0], [890, 1.5], [940, 6],
+];
+
+export const COURSE = Object.freeze({
+  startS: 46, // the start gate
+  finishS: 830, // the finish gate
+  checkpointEvery: 120,
+  laneHalfWidth: 15,
+  wallSteep: 0.05, // how quickly the walls curve up beyond the lane
+  flank: 0.55, // the channel's walls keep climbing at this slope (must stay above the run's own slope, so stretches stay local)
+  fall: 0.62, // the mountain's sides fall away at this slope beyond the ridge
+  plain: -16, // the desert floor round the mountain (the finish is at 0)
+});
+
+// How far the ridges stand above the lane, by arc length: low round the summit, tall along the gully.
+const RIDGE = [[0, 2.5], [60, 5], [130, 9], [540, 10], [560, 17], [620, 17], [640, 10], [860, 8], [940, 9]];
+
+// Features along the run, by arc length.
+const WIDTH = [[0, 26], [40, 22], [70, 15], [520, 15], [545, 9], [600, 9], [625, 15], [830, 18], [870, 30], [940, 30]];
+const ROLLERS = [{ from: 320, to: 432, wavelength: 28, height: 1.3 }, { from: 676, to: 740, wavelength: 22, height: 0.9 }];
+// A kicker's ramp curves up (shape exponent) so its lip points skyward; beyond the lip a landing slope eases back down to the run.
+const KICKERS = [{ at: 470, length: 12, height: 2.3, drop: 10, lane: 6, curve: 2.2 }, { at: 650, length: 14, height: 2.6, drop: 12, lane: 7, curve: 2.2 }];
+
+// ---------------------------------------------------------------- the centre line
+function catmull(p0, p1, p2, p3, t) {
+  const t2 = t * t, t3 = t2 * t;
+  return 0.5 * ((2 * p1) + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 + (-p0 + 3 * p1 - 3 * p2 + p3) * t3);
+}
+
+function sampleCentreLine(step = 1) {
+  const dense = [];
+  for (let i = 0; i < CONTROL.length - 1; i += 1) {
+    const p0 = CONTROL[Math.max(0, i - 1)], p1 = CONTROL[i], p2 = CONTROL[i + 1], p3 = CONTROL[Math.min(CONTROL.length - 1, i + 2)];
+    for (let k = 0; k < 40; k += 1) {
+      const t = k / 40;
+      dense.push([catmull(p0[0], p1[0], p2[0], p3[0], t), catmull(p0[1], p1[1], p2[1], p3[1], t)]);
+    }
+  }
+  dense.push(CONTROL[CONTROL.length - 1].slice());
+  // Resample at even arc length.
+  const out = [dense[0]];
+  let carry = 0;
+  for (let i = 1; i < dense.length; i += 1) {
+    const [ax, az] = dense[i - 1], [bx, bz] = dense[i];
+    const len = Math.hypot(bx - ax, bz - az);
+    let pos = step - carry;
+    while (pos <= len) {
+      const t = pos / len; out.push([mix(ax, bx, t), mix(az, bz, t)]); pos += step;
+    }
+    carry = len - (pos - step);
+  }
+  return out;
+}
+
+// Monotone cubic (Fritsch-Carlson) through [x, y] keys.
+function monotone(keys) {
+  const n = keys.length, xs = keys.map(k => k[0]), ys = keys.map(k => k[1]);
+  const d = [], m = new Array(n);
+  for (let i = 0; i < n - 1; i += 1) d.push((ys[i + 1] - ys[i]) / (xs[i + 1] - xs[i]));
+  m[0] = d[0]; m[n - 1] = d[n - 2];
+  for (let i = 1; i < n - 1; i += 1) m[i] = d[i - 1] * d[i] <= 0 ? 0 : 3 * (d[i - 1] + d[i]) / ((2 * d[i] + d[i - 1]) / d[i - 1] + (d[i] + 2 * d[i - 1]) / d[i]);
+  return x => {
+    if (x <= xs[0]) return ys[0];
+    if (x >= xs[n - 1]) return ys[n - 1];
+    let i = 0; while (x > xs[i + 1]) i += 1;
+    const h = xs[i + 1] - xs[i], t = (x - xs[i]) / h, t2 = t * t, t3 = t2 * t;
+    return (2 * t3 - 3 * t2 + 1) * ys[i] + (t3 - 2 * t2 + t) * h * m[i] + (-2 * t3 + 3 * t2) * ys[i + 1] + (t3 - t2) * h * m[i + 1];
+  };
+}
+
+function linearKeys(keys) {
+  return s => {
+    if (s <= keys[0][0]) return keys[0][1];
+    for (let i = 1; i < keys.length; i += 1) if (s <= keys[i][0]) {
+      const [a, va] = keys[i - 1], [b, vb] = keys[i]; return mix(va, vb, smooth(0, 1, (s - a) / (b - a)));
+    }
+    return keys[keys.length - 1][1];
+  };
+}
+
+// ---------------------------------------------------------------- build
+export function createCourse() {
+  const pts = sampleCentreLine(1);
+  const n = pts.length;
+  const length = n - 1;
+  // Everything along the run was laid out for a 940 m line; stretch it to the line's real length.
+  const k = length / 940;
+  const elevation = monotone(PROFILE.map(([s, y]) => [s * k, y]));
+  const halfWidth = linearKeys(WIDTH.map(([s, w]) => [s * k, w]));
+  const ridgeAt = linearKeys(RIDGE.map(([s, r]) => [s * k, r]));
+  const rollers = ROLLERS.map(r => ({ ...r, from: r.from * k, to: r.to * k }));
+  const kickers = KICKERS.map(kk => ({ ...kk, at: kk.at * k }));
+
+  // Per-point tangent and smoothed signed curvature (positive = turning left).
+  const tx = new Float64Array(n), tz = new Float64Array(n), rawK = new Float64Array(n);
+  for (let i = 0; i < n; i += 1) {
+    const a = pts[Math.max(0, i - 1)], b = pts[Math.min(n - 1, i + 1)];
+    const l = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1; tx[i] = (b[0] - a[0]) / l; tz[i] = (b[1] - a[1]) / l;
+  }
+  for (let i = 4; i < n - 4; i += 1) {
+    let dh = Math.atan2(tx[i + 4], tz[i + 4]) - Math.atan2(tx[i - 4], tz[i - 4]);
+    if (dh > Math.PI) dh -= 2 * Math.PI; if (dh < -Math.PI) dh += 2 * Math.PI;
+    rawK[i] = dh / 8;
+  }
+
+  // Per-point values, interpolated along each stretch: elevation, lane half width, bank, and the features' height on the centre line.
+  const E = new Float64Array(n), W = new Float64Array(n), B = new Float64Array(n), R = new Float64Array(n), K = new Float64Array(n), KL = new Float64Array(n);
+  for (let i = 0; i < n; i += 1) {
+    let sum = 0, c = 0; // 41 m box smoothing so banks build and fade gently
+    for (let j = i - 20; j <= i + 20; j += 1) if (j >= 0 && j < n) { sum += rawK[j]; c += 1; }
+    B[i] = clamp((sum / c) * 26, -0.32, 0.32); // rise of the outside of a turn, per metre across the lane
+    E[i] = elevation(i); W[i] = halfWidth(i); KL[i] = 6;
+    for (const r of rollers) if (i >= r.from && i <= r.to) {
+      R[i] += r.height * Math.sin(((i - r.from) / r.wavelength) * Math.PI * 2) * smooth(r.from, r.from + 12, i) * (1 - smooth(r.to - 12, r.to, i));
+    }
+    for (const kk of kickers) {
+      const start = kk.at - kk.length;
+      if (i < start || i > kk.at + kk.drop) continue;
+      K[i] += kk.height * (i <= kk.at ? ((i - start) / kk.length) ** kk.curve : 1 - smooth(0, 1, (i - kk.at) / kk.drop));
+      KL[i] = kk.lane;
+    }
+  }
+  // The mountain: every 4th centre-line point carries the height of the ridge tops and the lane's half width there, blended smoothly
+  // across the map with a Gaussian (so it has no seams where bends meet).
+  const MS = [];
+  for (let i = 0; i < n; i += 4) MS.push({ x: pts[i][0], z: pts[i][1], top: E[i] + ridgeAt(i), w: W[i] });
+  const SIGMA = 55, INV = 1 / (2 * SIGMA * SIGMA), SKIP = 24 / INV; // weights are relative to the nearest sample, so none underflow
+  function mountain(x, z, near) {
+    let d2min = Infinity;
+    for (let q = 0; q < MS.length; q += 1) { const dx = x - MS[q].x, dz = z - MS[q].z; const d2 = dx * dx + dz * dz; if (d2 < d2min) d2min = d2; }
+    let wsum = 0, top = 0, w = 0;
+    for (let q = 0; q < MS.length; q += 1) {
+      const m = MS[q], dx = x - m.x, dz = z - m.z, rel = dx * dx + dz * dz - d2min;
+      if (rel > SKIP) continue; // weight below e^-24: makes no difference
+      const wt = Math.exp(-rel * INV); wsum += wt; top += wt * m.top; w += wt * m.w;
+    }
+    top /= wsum; w /= wsum;
+    const flank = top - COURSE.fall * Math.max(0, near - w - 16);
+    return Math.max(flank, COURSE.plain);
+  }
+
+  // Kicker lips are sharper than the 1 m spacing: place the exact lip on the nearest point.
+  for (const kk of kickers) { const i = Math.round(kk.at); K[i] = Math.max(K[i], kk.height); }
+
+  const SEG_LEN = new Float64Array(n - 1);
+  for (let i = 0; i < n - 1; i += 1) SEG_LEN[i] = Math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]);
+  const OVERSHOOT = 1.2; // a stretch rises this steeply beyond its own ends, so each one only shapes the ground beside it
+  const KNEE = 14; // metres beyond the lane where the curved wall hands over to the flank's straight climb
+
+  // The shaped surface of one stretch [i, i+1] at world (x, z), before the noise. Continuous in x and z.
+  function stretchHeight(i, x, z) {
+    const ax = pts[i][0], az = pts[i][1], len = SEG_LEN[i];
+    const ex = (pts[i + 1][0] - ax) / len, ez = (pts[i + 1][1] - az) / len;
+    const along = (x - ax) * ex + (z - az) * ez;
+    const cross = ex * (z - az) - ez * (x - ax); // signed distance across: positive = right of travel
+    const t = clamp(along / len, 0, 1);
+    const over = along < 0 ? -along : along > len ? along - len : 0;
+    const j = i + 1;
+    const w = mix(W[i], W[j], t), ad = Math.abs(cross), inLane = Math.min(ad, w);
+    let h = mix(E[i], E[j], t) + 0.010 * inLane * inLane + mix(B[i], B[j], t) * clamp(cross, -w, w);
+    const roll = mix(R[i], R[j], t), kick = mix(K[i], K[j], t);
+    if (roll !== 0) h += roll * (1 - smooth(w - 5, w, ad));
+    if (kick !== 0) { const lane = Math.max(KL[i], KL[j]); h += kick * (1 - smooth(lane, lane + 3, ad)); }
+    const out = Math.max(0, ad - w);
+    const gully = 1 - smooth(9, 15, w); // 1 in the narrow gully: taller, steeper walls
+    const steep = COURSE.wallSteep * (1 + 2.2 * gully);
+    h += out < KNEE ? steep * out * out : steep * KNEE * KNEE + COURSE.flank * (out - KNEE);
+    return h + over * OVERSHOOT;
+  }
+
+  // Spatial lists: for each 8 m cell, the stretches that can be the lowest there (within 45 m of the closest one).
+  const CELL = 8, REACH = 30, BOUND = 900;
+  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+  for (const [x, z] of pts) { minX = Math.min(minX, x); maxX = Math.max(maxX, x); minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z); }
+  const gx0 = Math.floor((minX - BOUND) / CELL), gz0 = Math.floor((minZ - BOUND) / CELL);
+  const gw = Math.ceil((maxX + BOUND) / CELL) - gx0, gh = Math.ceil((maxZ + BOUND) / CELL) - gz0;
+  const lists = new Array(gw * gh);
+  const coarse = []; for (let i = 0; i < n - 1; i += 3) coarse.push(i); if (coarse[coarse.length - 1] !== n - 2) coarse.push(n - 2);
+
+  function segDist(i, x, z) {
+    const ax = pts[i][0], az = pts[i][1], ex = pts[i + 1][0] - ax, ez = pts[i + 1][1] - az;
+    const t = clamp(((x - ax) * ex + (z - az) * ez) / (ex * ex + ez * ez), 0, 1);
+    return Math.hypot(x - ax - ex * t, z - az - ez * t);
+  }
+  // A stretch can only be the lowest in a cell if its lowest possible height there is below the best guaranteed height. Lower bound per
+  // stretch: its lowest elevation, minus the most a bank or roller can take away, plus the wall at its nearest approach to the cell.
+  const wallMin = out => (out < KNEE ? COURSE.wallSteep * out * out : COURSE.wallSteep * KNEE * KNEE + COURSE.flank * (out - KNEE));
+  const ROLL_MAX = Math.max(0, ...rollers.map(r => r.height));
+  const LOW = new Float64Array(n - 1), WMAX = new Float64Array(n - 1);
+  for (let i = 0; i < n - 1; i += 1) {
+    WMAX[i] = Math.max(W[i], W[i + 1]);
+    LOW[i] = Math.min(E[i], E[i + 1]) - Math.max(Math.abs(B[i]), Math.abs(B[i + 1])) * WMAX[i] - ROLL_MAX;
+  }
+  function cellList(cx, cz) {
+    const key = cz * gw + cx;
+    if (lists[key]) return lists[key];
+    const x0 = (gx0 + cx) * CELL, z0 = (gz0 + cz) * CELL, half = CELL * Math.SQRT1_2;
+    const mx = x0 + CELL / 2, mz = z0 + CELL / 2;
+    const dist = new Float64Array(n - 1);
+    let best = Infinity, bestI = 0;
+    for (let i = 0; i < n - 1; i += 1) { dist[i] = segDist(i, mx, mz); if (dist[i] < best) { best = dist[i]; bestI = i; } }
+    // Guaranteed ceiling: the nearest stretch's height at the cell's corners and centre, plus a margin for the curve between them.
+    let ceiling = -Infinity;
+    for (const [px, pz] of [[x0, z0], [x0 + CELL, z0], [x0, z0 + CELL], [x0 + CELL, z0 + CELL], [mx, mz]]) {
+      let lo = Infinity;
+      for (let i = Math.max(0, bestI - REACH); i < Math.min(n - 1, bestI + REACH); i += 1) lo = Math.min(lo, stretchHeight(i, px, pz));
+      ceiling = Math.max(ceiling, lo);
+    }
+    ceiling += 3;
+    const list = [];
+    for (let i = 0; i < n - 1; i += 1) {
+      if (dist[i] <= best + 2 * half || LOW[i] + wallMin(Math.max(0, dist[i] - half - WMAX[i])) <= ceiling) list.push(i);
+    }
+    lists[key] = Int32Array.from(list);
+    return lists[key];
+  }
+
+  function heightAt(x, z) {
+    const cx = Math.floor(x / CELL) - gx0, cz = Math.floor(z / CELL) - gz0;
+    const list = cx >= 0 && cz >= 0 && cx < gw && cz < gh ? cellList(cx, cz) : coarse;
+    let h = Infinity, near = Infinity, nearI = 0;
+    for (let q = 0; q < list.length; q += 1) {
+      const i = list[q];
+      const v = stretchHeight(i, x, z); if (v < h) h = v;
+      const dd = segDist(i, x, z); if (dd < near) { near = dd; nearI = i; }
+    }
+    h = Math.min(h, mountain(x, z, near));
+    // Lumpy dunes on the walls, the mountain and the plain; none in the lane.
+    const out = Math.max(0, near - W[nearI]);
+    if (out > 0) {
+      const rough = smooth(0, 10, out);
+      h += rough * ((fbm(x * 0.012, z * 0.012, 4) - 0.5) * 14 * smooth(0, 60, out) + (noise(x * 0.09, z * 0.09) - 0.5) * 1.4);
+    }
+    return h;
+  }
+
+  const EPS = 0.35;
+  function normalAt(x, z, out = { x: 0, y: 1, z: 0 }) {
+    const hx = heightAt(x + EPS, z) - heightAt(x - EPS, z), hz = heightAt(x, z + EPS) - heightAt(x, z - EPS);
+    const nx = -hx, ny = 2 * EPS, nz = -hz, l = Math.hypot(nx, ny, nz);
+    out.x = nx / l; out.y = ny / l; out.z = nz / l;
+    return out;
+  }
+
+  // Where along the run a point is: arc length, signed offset across the lane, distance from the centre line.
+  function locate(x, z) {
+    const cx = Math.floor(x / CELL) - gx0, cz = Math.floor(z / CELL) - gz0;
+    const list = cx >= 0 && cz >= 0 && cx < gw && cz < gh ? cellList(cx, cz) : coarse;
+    let best = Infinity, bi = 0;
+    for (let k = 0; k < list.length; k += 1) { const dd = segDist(list[k], x, z); if (dd < best) { best = dd; bi = list[k]; } }
+    const ax = pts[bi][0], az = pts[bi][1], ex = pts[bi + 1][0] - ax, ez = pts[bi + 1][1] - az;
+    const t = clamp(((x - ax) * ex + (z - az) * ez) / (ex * ex + ez * ez), 0, 1);
+    return { s: bi + t, distance: best, halfWidth: halfWidth(bi + t) };
+  }
+
+  // A point on the centre line and the downhill heading there (three.js yaw: 0 faces -z, positive turns left).
+  function pointAt(s) {
+    const i = clamp(Math.floor(s), 0, n - 2), t = clamp(s - i, 0, 1);
+    const x = mix(pts[i][0], pts[i + 1][0], t), z = mix(pts[i][1], pts[i + 1][1], t);
+    const yaw = Math.atan2(-tx[i], -tz[i]);
+    return { x, z, y: heightAt(x, z), yaw };
+  }
+
+  return {
+    length, points: pts, heightAt, normalAt, locate, pointAt, elevation, halfWidth,
+    startS: COURSE.startS * k, finishS: COURSE.finishS * k,
+    kickers: kickers.map(kk => kk.at), bounds: { minX: minX - BOUND, maxX: maxX + BOUND, minZ: minZ - BOUND, maxZ: maxZ + BOUND },
+  };
+}
