@@ -4,7 +4,8 @@ import { createCourse } from './course.js';
 import { COURSES, courseById } from './courses/index.js';
 import { createBoardState, stepBoard, speedOf, leanSteer, boardAttitude, BOARD } from './board.js';
 import { clamp, angleDelta } from './math.js';
-import { createSky, createTerrain, LOOK } from './world.js';
+import { createSky, createTerrain, LOOK, worldTime } from './world.js';
+import { createWindSand, WIND_SAND } from './wind-sand.js';
 import { createGate, createLaneFlags, createBoardMesh, loadBoardModel } from './props.js';
 import { createSign, formatTime } from './hud.js';
 import { createRideAudio } from './audio.js';
@@ -55,8 +56,11 @@ const courseDef = courseById(params.get('run'));
 const runNumber = COURSES.indexOf(courseDef) + 1;
 const course = createCourse(courseDef);
 const status = document.getElementById('status');
+const sunUniform = { value: LOOK.sun };
+let windSand = null; // blowing sand, once the ground has loaded
 createTerrain(course, { url: `${BASE}terrain/${course.id}.bin`, sandUrl: `${BASE}textures/sand-detail.jpg`, onStatus: t => { status.textContent = t; } }).then(terrain => {
   scene.add(terrain); status.textContent = ''; enterVR.disabled = !xrSupported; playButton.disabled = false;
+  if (terrain.userData.ground && !params.has('nowind')) windSand = createWindSand({ scene, lattice: terrain.userData.ground, sun: sunUniform });
   enterVR.textContent = xrSupported ? 'Enter VR' : 'VR not available';
 });
 scene.add(createGate(course, course.startS, 'START', { bg: '#2f7fd8' }));
@@ -65,7 +69,7 @@ scene.add(createLaneFlags(course));
 
 const boardMesh = createBoardMesh(); scene.add(boardMesh);
 loadBoardModel(boardMesh, `${BASE}models/board/sirocco_dune156.glb`);
-const puffs = createSandPuffs({ scene, sun: { value: LOOK.sun }, heightAt: course.heightAt });
+const puffs = createSandPuffs({ scene, sun: sunUniform, heightAt: course.heightAt });
 const audio = createRideAudio();
 const input = createInput();
 const hands = createVRHands({ renderer, scene, parent: rig });
@@ -360,6 +364,8 @@ function frame(time) {
 
   hands.update(dt);
   puffs.update(dt);
+  worldTime.value = (time / 1000) % 3600;
+  if (windSand) { camera.getWorldPosition(headWorld); windSand.update(time / 1000, headWorld, session ? WIND_SAND.vrViewHeight : renderer.domElement.height); }
   renderer.render(scene, camera);
 }
 

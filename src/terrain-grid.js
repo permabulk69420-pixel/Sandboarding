@@ -11,8 +11,8 @@ export const GRID = Object.freeze({
   nearStep: 2.5,
   nearBeyond: 40, // metres past the lane's edge the fine grid reaches (over the walls and ridges, partway down the mountain's sides)
   tile: 64, // quads per side of a fine tile (160 m)
-  farStep: 32,
-  farMargin: 1900, // metres beyond the run's bounding box the coarse grid reaches (the haze has swallowed it well before the edge)
+  farStep: 40,
+  farMargin: 3400, // metres beyond the run's bounding box the coarse grid reaches: far enough to see the dune sea from the summit (the haze has swallowed it before the edge: LOOK.fogEnd)
   farHoleBeyond: 22, // coarse quads entirely closer than this past the lane's edge are left out (the fine grid covers them)
   farSink: 10, // metres the coarse grid is lowered where it overlaps the fine one, easing back to true height one coarse step beyond it
 });
@@ -82,8 +82,11 @@ function buildGrid(course, { step, x0, z0, cols, rows, keepQuad, heights, tile =
     const vert = i => { let v = remap.get(i); if (v === undefined) { v = remap.size; remap.set(i, v); } return v; };
     const idx = [];
     for (const a of list) {
+      // Split each quad along the diagonal whose ends are closest in height, so a crest or a gully running across the grid stays a
+      // clean line instead of a row of saw teeth (the canyon walls are steep enough for it to show against the sky).
       const b = a + 1, d = a + cols, e = d + 1;
-      idx.push(vert(a), vert(d), vert(b), vert(b), vert(d), vert(e));
+      if (Math.abs(y[a] - y[e]) < Math.abs(y[b] - y[d])) idx.push(vert(a), vert(d), vert(e), vert(a), vert(e), vert(b));
+      else idx.push(vert(a), vert(d), vert(b), vert(b), vert(d), vert(e));
     }
     const m = remap.size;
     const positions = new Float32Array(m * 3), normals = new Float32Array(m * 3);
@@ -94,7 +97,9 @@ function buildGrid(course, { step, x0, z0, cols, rows, keepQuad, heights, tile =
     tiles.push({ positions, normals, indices: m > 65535 ? Uint32Array.from(idx) : Uint16Array.from(idx), vertexCount: m });
     vertexCount += m; triangleCount += idx.length / 3;
   }
-  return { tiles, order: Float32Array.from(order), vertexCount, triangleCount };
+  // The whole lattice too, for anything that wants the ground's height on the GPU (the blowing sand): `used` marks the points that have one.
+  const lattice = { x0, z0, cols, rows, step, heights: y, used };
+  return { tiles, order: Float32Array.from(order), vertexCount, triangleCount, lattice };
 }
 
 // `baked`: optional Float32Array of every used vertex height, fine grid first then coarse (from tools/bake-terrain.js).

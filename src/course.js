@@ -18,7 +18,25 @@ export const COURSE = Object.freeze({
   wallSteep: 0.05, // how quickly the walls curve up beyond the lane
   flank: 0.55, // the channel's walls keep climbing at this slope (must stay above the run's own slope, so stretches stay local)
   fall: 0.62, // the mountain's sides fall away at this slope beyond the ridge
+  // The dune sea on the plain below: rows of big dunes across the wind (which blows toward +x+z, as the sand ripples and the blowing sand),
+  // each a long gentle climb and a steep slip face downwind. They grow in from `duneFrom` to `duneFull` metres past the lane's edge, so
+  // they never touch the run.
+  duneSpacing: 420, // metres from one crest to the next
+  duneHeight: [12, 50], // lowest and tallest crests, metres
+  duneFrom: 130,
+  duneFull: 450,
 });
+
+// The dune sea's height at (x, z), before it is faded in. Rows across the wind, bent and broken up by slow noise.
+const DUNE_WIND = [0.82, 0.57];
+export function duneSea(x, z) {
+  const u = x * DUNE_WIND[0] + z * DUNE_WIND[1], v = -x * DUNE_WIND[1] + z * DUNE_WIND[0];
+  const phase = u / COURSE.duneSpacing + (fbm(v * 0.0016 + 11.3, u * 0.0006 - 4.1, 3) - 0.5) * 2.4 + (noise(v * 0.005, u * 0.003) - 0.5) * 0.35;
+  const f = phase - Math.floor(phase); // 0 to 1 across one dune, upwind to downwind
+  const shape = f < 0.72 ? smooth(0, 1, f / 0.72) : 1 - smooth(0, 1, (f - 0.72) / 0.28);
+  const [lo, hi] = COURSE.duneHeight;
+  return shape * mix(lo, hi, smooth(0.25, 0.75, fbm(x * 0.0011 + 3.1, z * 0.0011 - 7.7, 3)));
+}
 
 // ---------------------------------------------------------------- the centre line
 function catmull(p0, p1, p2, p3, t) {
@@ -141,7 +159,11 @@ export function createCourse(def = COURSES[0]) {
     }
     top /= wsum; w /= wsum;
     const flank = top - COURSE.fall * Math.max(0, near - w - 16);
-    return Math.max(flank, def.plain ?? -16);
+    const out = near - w, plain = def.plain ?? -16;
+    const floor = out > COURSE.duneFrom ? plain + duneSea(x, z) * smooth(COURSE.duneFrom, COURSE.duneFull, out) : plain;
+    // a smooth maximum, so the dunes run up into the mountain's foot without a crease
+    const k = 16, gap = Math.max(0, k - Math.abs(flank - floor)) / k;
+    return Math.max(flank, floor) + gap * gap * k * 0.25;
   }
 
   // Kicker lips are sharper than the 1 m spacing: place the exact lip on the nearest point.
@@ -283,7 +305,7 @@ export function createCourse(def = COURSES[0]) {
 
   return {
     length, points: pts, heightAt, normalAt, locate, pointAt, elevation, halfWidth,
-    id: def.id, name: def.name, startS: def.startS * k, finishS: def.finishS * k,
+    id: def.id, name: def.name, startS: def.startS * k, finishS: def.finishS * k, plain: def.plain ?? -16,
     kickers: kickers.map(kk => kk.at),
     // Stretches where the lane is meant to be steep (kicker ramps and landings, the gap), for tests and anything that wants to know.
     features: [...kickers.map(kk => ({ type: 'kicker', from: kk.at - kk.length, to: kk.at + kk.drop })), ...gaps.map(gp => ({ type: 'gap', from: gp.from, to: gp.to })),

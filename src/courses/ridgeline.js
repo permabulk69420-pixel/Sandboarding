@@ -22,7 +22,7 @@ const DESIGN_LENGTH = 2948;
 const PROFILE = [
   [0, 460], [53, 459], [77, 456], [165, 438], [264, 412], [352, 384], [396, 378], [484, 366], [551, 352], [639, 338], [727, 322], [815, 309],
   [874, 300], [1000, 286], [1120, 272], [1250, 256], [1330, 240], [1420, 214], [1452, 207], [1475, 201], [1525, 172], [1560, 165], [1640, 156],
-  [1760, 140], [1850, 124], [1960, 108], [2050, 94], [2105, 88], [2178, 68], [2230, 52], [2280, 42], [2400, 28], [2560, 15], [2700, 4.5],
+  [1760, 140], [1850, 124], [1960, 108], [2050, 94], [2105, 88], [2178, 68], [2214, 64], [2222, 60.5], [2264, 39.5], [2274, 36.5], [2300, 33], [2400, 26], [2560, 15], [2700, 4.5],
   [2780, 1], [2830, 0], [2890, 2], [2948, 7],
 ];
 
@@ -47,7 +47,7 @@ const KICKERS = [
   { at: 517, length: 12, height: 2.3, drop: 10, lane: 6, curve: 2.2 },
   { at: 716, length: 14, height: 2.6, drop: 12, lane: 7, curve: 2.2 },
   { at: 1452, length: 24, height: 4.6, drop: 75, lane: 9, curve: 2.3 }, // big jump one: a long landing as steep as you fall, enough air to flip
-  { at: 2182, length: 20, height: 3.8, drop: 6, lane: 10, curve: 2.6 }, // the gap jump's takeoff
+  { at: 2182, length: 20, height: 3.4, drop: 6, lane: 10, curve: 2.6 }, // the gap jump's takeoff: over a gap in nearly level ground onto a long 27 degree landing
 ];
 // A trench across the middle of the lane: the gap you jump. Steep on the near side, a long gentle ramp out on the far side (the run keeps
 // falling away under it), so coming up short costs you speed but never traps you.
