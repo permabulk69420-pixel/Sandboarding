@@ -39,6 +39,7 @@ const BASE_LOOK = Object.freeze({
   sunSize: 1, // the sun's disc as a multiple of the usual size (a moon can be bigger)
   clouds: { amount: 1, cool: [0.74, 0.4, 0.4], warm: [1.25, 0.72, 0.42] }, // high streaks of cloud: how much, and their colour in shadow and in the sun
   exposure: 1, // the camera's: up for a dim night, down for a blazing noon
+  mirage: 0, // 0 to 1: far, flat ground turns to wobbling pools that mirror the sky (a hot noon; off at twilight)
   dust: [1, 1, 1], dustLight: 1, // the blowing sand and the puffs: a tint on their (golden) colour, and how brightly they are lit
   // The ringed planet (the Oasis one: a banded teal gas giant with cream rings), hanging ahead and to the right as you ride down, so the
   // sun is on your left and the planet on your right for most of the run. Lit by the same sun, so you see it nearly half lit.
@@ -73,7 +74,7 @@ export function makeLook(over = {}) {
     sunDisc: new THREE.Vector2(Math.cos(Math.acos(0.99955) * o.sunSize), Math.cos(Math.acos(0.9998) * o.sunSize)), // the cosines where the disc's edge starts and ends
 
     clouds: Object.freeze({ amount: o.clouds.amount, cool: new THREE.Vector3(...o.clouds.cool), warm: new THREE.Vector3(...o.clouds.warm) }),
-    exposure: o.exposure,
+    exposure: o.exposure, mirage: o.mirage,
     dust: new THREE.Vector3(...o.dust), dustLight: o.dustLight,
     planet: Object.freeze({
       dir: new THREE.Vector3(...o.planet.dir).normalize(), radius: o.planet.radius, ringInner: o.planet.ringInner, ringOuter: o.planet.ringOuter,
@@ -307,7 +308,7 @@ const SAND_VERT = /* glsl */`
 
 const SAND_FRAG = /* glsl */`
   uniform vec3 uSun, uSunColor, uSand, uShadow, uRock, uBounce, uZenith, uMid, uHorizon, uGlow;
-  uniform float uFog, uFogFloor, uFogHeight, uFogEnd, uDetail, uTexOn;
+  uniform float uFog, uFogFloor, uFogHeight, uFogEnd, uDetail, uTexOn, uMirage, uTime;
   varying vec2 vShape;
   uniform sampler2D uSandTex; // ripple normal in red/green, brightness detail in blue (ambientCG Ground098, CC0)
   varying vec3 vWorld; varying vec3 vNormal;
@@ -393,6 +394,21 @@ const SAND_FRAG = /* glsl */`
     float thick = abs(yb - ya) > 0.01 ? (exp(-ya) - exp(-yb)) / (yb - ya) : exp(-ya);
     float fog = max(1.0 - exp(-pow(uFog * dist * thick, 1.6)), smoothstep(uFogEnd - 500.0, uFogEnd, dist));
     col = mix(col, airColour(-V), fog);
+
+    // A mirage (only where a look asks for one): far, level ground turns to pools that mirror the sky, darker and bluer than the sand
+    // round them, their edges wobbling in the heat. All of it is a function of where the ground is, never of the screen, so both eyes
+    // and every frame agree. It keeps clear of the run itself (nothing nearer than a few hundred metres) and fades into the haze.
+    if (uMirage > 0.0 && dist > 260.0) { // (nothing nearer than that is ever touched, so the near ground never pays for it)
+      vec2 wob = vec2(sin(q.y * 0.043 + uTime * 0.7), cos(q.x * 0.037 - uTime * 0.55)) * 14.0;
+      vec2 w = (q + wob) * 0.0018;
+      float field = vnoise(w + vec2(3.1, 7.7)) * 0.62 + vnoise(w * 2.9 + vec2(11.3, 1.7)) * 0.38;
+      float pool = smoothstep(0.50, 0.60, field);
+      float away = smoothstep(260.0, 700.0, dist) * (1.0 - smoothstep(2200.0, 3200.0, dist));
+      float level = smoothstep(0.97, 0.995, vNormal.y);
+      float glint = 0.5 + 0.5 * sin(q.x * 0.11 - q.y * 0.07 + uTime * 1.6 + vnoise(q * 0.02) * 8.0);
+      vec3 water = mix(uMid, uHorizon, 0.45) * (1.05 + 0.25 * glint);
+      col = mix(col, water, uMirage * pool * away * level);
+    }
     gl_FragColor = vec4(col, 1.0);
     #include <tonemapping_fragment>
     #include <colorspace_fragment>
@@ -426,13 +442,13 @@ export function createSky(look = LOOK) {
   return sky;
 }
 
-export function createSandMaterial({ detail = 1, offset = 0, floor = -16, shapeOn = false, look = LOOK, rock = look.rock } = {}) {
+export function createSandMaterial({ detail = 1, offset = 0, floor = -16, shapeOn = false, look = LOOK, rock = look.rock, mirage = 0 } = {}) {
   const material = new THREE.ShaderMaterial({
     uniforms: {
       ...shared(look), uSunColor: { value: look.sunColor }, uSand: { value: look.sand }, uShadow: { value: look.sandShadow },
       uRock: { value: rock }, uBounce: { value: look.bounce }, uFog: { value: look.fogDensity }, uFogFloor: { value: floor },
       uFogHeight: { value: look.fogHeight }, uFogEnd: { value: look.fogEnd }, uDetail: { value: detail }, uShapeOn: { value: shapeOn ? 1 : 0 },
-      uSandTex: { value: null }, uTexOn: { value: 0 },
+      uSandTex: { value: null }, uTexOn: { value: 0 }, uMirage: { value: mirage }, uTime: worldTime,
     },
     vertexShader: SAND_VERT, fragmentShader: SAND_FRAG,
   });
@@ -467,7 +483,7 @@ export async function createTerrain(course, { url, sandUrl, onStatus = () => {},
   }
   const group = new THREE.Group(); group.name = 'Terrain';
   const floor = course.plain ?? -16;
-  const nearMaterial = createSandMaterial({ detail: 1, floor, shapeOn: true, look });
+  const nearMaterial = createSandMaterial({ detail: 1, floor, shapeOn: true, look, mirage: look.mirage });
   const near = new THREE.Group(); near.name = 'Terrain near';
   for (const tile of grids.near.tiles) near.add(new THREE.Mesh(tileGeometry(tile), nearMaterial));
   if (sandUrl) {
@@ -479,7 +495,7 @@ export async function createTerrain(course, { url, sandUrl, onStatus = () => {},
       nearMaterial.uniforms.uTexOn.value = 1;
     });
   }
-  const farMaterial = createSandMaterial({ detail: 0, floor, look }); // no overlap with the fine grid any more, so no depth offset
+  const farMaterial = createSandMaterial({ detail: 0, floor, look, mirage: look.mirage }); // no overlap with the fine grid any more, so no depth offset
   const far = new THREE.Group(); far.name = 'Terrain far';
   for (const tile of grids.far.tiles) far.add(new THREE.Mesh(tileGeometry(tile), farMaterial));
   group.add(far, near);
