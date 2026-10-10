@@ -76,7 +76,7 @@ loadBoardModel(boardMesh, `${BASE}models/board/sirocco_dune156.glb`);
 // The cabin (a test for now) sits on the summit pad and you start inside it. ?nolodge leaves it out.
 let lodge = null;
 if (!params.has('nolodge')) {
-  import('./lodge-test.js').then(m => m.placeLodge({ scene, course, url: `${BASE}models/lodge/cabin-v3.glb` }))
+  import('./lodge-test.js').then(m => m.placeLodge({ scene, course, url: `${BASE}models/lodge/cabin-loft.glb` }))
     .then(l => { lodge = l; if (mode === 'summit') placeOnSummit(); }).catch(error => console.warn('lodge', error));
 }
 const puffs = createSandPuffs({ scene, sun: sunUniform, heightAt: course.heightAt });
