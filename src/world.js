@@ -416,7 +416,7 @@ export async function createTerrain(course, { url, sandUrl, onStatus = () => {} 
       nearMaterial.uniforms.uTexOn.value = 1;
     });
   }
-  const farMaterial = createSandMaterial({ detail: 0, offset: 2, floor });
+  const farMaterial = createSandMaterial({ detail: 0, floor }); // no overlap with the fine grid any more, so no depth offset
   const far = new THREE.Group(); far.name = 'Terrain far';
   for (const tile of grids.far.tiles) far.add(new THREE.Mesh(tileGeometry(tile), farMaterial));
   group.add(far, near);

@@ -1,22 +1,20 @@
 // The ground as plain arrays (no three.js), so building it can be timed and tested in node.
 //
-// Two grids from the same height field: a fine one (2.5 m) only where it matters, over the lane and 40 m past its edges (wider in the bowl,
-// narrower in the canyon), and a coarse one (32 m) for the mountains out to the horizon with the run's corridor cut out of it. The coarse
-// one is drawn pushed back slightly (polygon offset in the material) so in the band where both exist, the fine one always wins.
-// The fine grid is cut into square tiles so the headset can skip the ones behind you or out of view; normals are worked out on the whole
-// grid first, so the tiles' edges light the same and no seams show. Working the heights out takes a few seconds, so tools/bake-terrain.js
-// does it at build time and the game reads them from public/terrain/heights.bin.
+// Two grids from the same height field, side by side and never overlapping: a fine one (2.5 m squares, split to 1.25 m over the lane) over
+// the run and everything near it, and a coarse one (40 m squares) for the mountains and the dune sea out to the horizon. Where they meet
+// the fine grid's edge is fitted onto the coarse one's, so the ground is closed. The fine grid is cut into square tiles so the headset can
+// skip the ones behind you or out of view; normals are worked out on the whole grid first, so tile edges light the same. Working the
+// heights out takes a while, so tools/bake-terrain.js does it at build time and the game reads them from public/terrain/<course id>.bin.
 
 export const GRID = Object.freeze({
   nearStep: 2.5,
   laneSplit: 2, // over the lane and the foot of its walls each near square is split this many ways each way (1.25 m), so kickers, lips
-  laneBeyond: 7, // and side hits are smooth: within this many metres past the lane's edge
-  nearBeyond: 40, // metres past the lane's edge the fine grid reaches (over the walls and ridges, partway down the mountain's sides)
+  laneBeyond: 7, // and side hits are smooth: within this many metres past the lane's edge,
+  crestBend: 0.3, // and anywhere the ground bends sharply (a crest, a rim, a lip): metres a square's corner stands off the line of its neighbours
   tile: 64, // quads per side of a fine tile (160 m)
   farStep: 40,
   farMargin: 3400, // metres beyond the run's bounding box the coarse grid reaches: far enough to see the dune sea from the summit (the haze has swallowed it before the edge: LOOK.fogEnd)
-  farHoleBeyond: 22, // coarse quads entirely closer than this past the lane's edge are left out (the fine grid covers them)
-  farSink: 10, // metres the coarse grid is lowered where it overlaps the fine one, easing back to true height one coarse step beyond it
+  farHoleBeyond: 22, // a coarse square any part of which comes this close past the lane's edge is left to the fine grid (with a ring round it)
 });
 
 // For each lattice point: how far it is past the edge of the lane, measured to the nearest centre-line point (coarse but plenty for masks).
@@ -107,44 +105,58 @@ function buildGrid(course, { step, x0, z0, cols, rows, keepQuad, heights, tile =
 // The near grid: 2.5 m squares, split into 1.25 m ones over the lane and the foot of its walls. Where a big square meets split ones its
 // edge has an extra vertex in the middle, so it is drawn as a fan from its centre to keep the surface closed (no cracks). Built on a
 // 1.25 m lattice; only the points some triangle uses get a height. Same outputs as buildGrid.
-function buildNearGrid(course, { x0, z0, bcols, brows, keepBlock, fineBlock, beyondAt, heights, tile }) {
+function buildNearGrid(course, { x0, z0, bcols, brows, keepBlock, fineBlock, beyondAt, adjust, heights, tile }) {
   const S = GRID.laneSplit, step = GRID.nearStep / S;
   const cols = bcols * S + 1, rows = brows * S + 1, n = cols * rows;
   const keep = new Uint8Array(bcols * brows), fine = new Uint8Array(bcols * brows);
-  for (let bj = 0; bj < brows; bj += 1) for (let bi = 0; bi < bcols; bi += 1) {
-    const b = bj * bcols + bi;
-    keep[b] = keepBlock(bi, bj) ? 1 : 0;
-    fine[b] = keep[b] && fineBlock(bi, bj) ? 1 : 0;
-  }
-  const isFine = (bi, bj) => bi >= 0 && bj >= 0 && bi < bcols && bj < brows && fine[bj * bcols + bi] === 1;
+  for (let bj = 0; bj < brows; bj += 1) for (let bi = 0; bi < bcols; bi += 1) keep[bj * bcols + bi] = keepBlock(bi, bj) ? 1 : 0;
   const L = (i, j) => j * cols + i; // lattice index
-  // Triangles as lattice index triples (winding as buildGrid's: a, d, b with d below a), and which block each belongs to.
   const tris = [], triBlock = [];
   const used = new Uint8Array(n);
   const y = new Float32Array(n);
   const blocks = [];
   for (let bj = 0; bj < brows; bj += 1) for (let bi = 0; bi < bcols; bi += 1) if (keep[bj * bcols + bi]) blocks.push([bi, bj]);
   const corners = (bi, bj) => { const i = bi * S, j = bj * S; return [L(i, j), L(i + S, j), L(i, j + S), L(i + S, j + S)]; };
-  for (const [bi, bj] of blocks) for (const v of corners(bi, bj)) used[v] = 1;
-  for (const [bi, bj] of blocks) {
-    if (fine[bj * bcols + bi]) for (let j = 0; j <= S; j += 1) for (let i = 0; i <= S; i += 1) used[L(bi * S + i, bj * S + j)] = 1;
-    else if (isFine(bi - 1, bj) || isFine(bi + 1, bj) || isFine(bi, bj - 1) || isFine(bi, bj + 1)) {
-      used[L(bi * S + S / 2, bj * S + S / 2)] = 1; // the fan's centre
-      if (isFine(bi - 1, bj)) used[L(bi * S, bj * S + S / 2)] = 1;
-      if (isFine(bi + 1, bj)) used[L(bi * S + S, bj * S + S / 2)] = 1;
-      if (isFine(bi, bj - 1)) used[L(bi * S + S / 2, bj * S)] = 1;
-      if (isFine(bi, bj + 1)) used[L(bi * S + S / 2, bj * S + S)] = 1;
-    }
-  }
-  // Heights where used (or read in order from the bake).
+  // Heights where used, in lattice order (or read in that order from the bake). Recorded raw for the bake; adjusted for drawing later.
   const order = [];
   let k = 0;
-  for (let i = 0; i < n; i += 1) {
-    if (!used[i]) continue;
-    y[i] = heights ? heights[heights.offset + k++] : course.heightAt(x0 + (i % cols) * step, z0 + Math.floor(i / cols) * step);
-    order.push(y[i]);
+  const readNew = () => {
+    for (let i = 0; i < n; i += 1) {
+      if (used[i] !== 1) continue;
+      y[i] = heights ? heights[heights.offset + k++] : course.heightAt(x0 + (i % cols) * step, z0 + Math.floor(i / cols) * step);
+      order.push(y[i]);
+      used[i] = 2; // read
+    }
+  };
+  // First the squares' corners, so the ground's own shape can decide where it needs the finer squares.
+  for (const [bi, bj] of blocks) for (const v of corners(bi, bj)) if (!used[v]) used[v] = 1;
+  readNew();
+  const bend = c => { // how far a corner stands off the straight line of its neighbours, either way (metres)
+    const i = c % cols, j = Math.floor(c / cols);
+    let most = 0;
+    if (i >= S && i + S < cols && used[c - S] && used[c + S]) most = Math.max(most, Math.abs(y[c] - (y[c - S] + y[c + S]) / 2));
+    if (j >= S && j + S < rows && used[c - S * cols] && used[c + S * cols]) most = Math.max(most, Math.abs(y[c] - (y[c - S * cols] + y[c + S * cols]) / 2));
+    return most;
+  };
+  for (const [bi, bj] of blocks) {
+    const b = bj * bcols + bi;
+    fine[b] = fineBlock(bi, bj) || corners(bi, bj).some(c => bend(c) > GRID.crestBend) ? 1 : 0;
   }
+  const isFine = (bi, bj) => bi >= 0 && bj >= 0 && bi < bcols && bj < brows && fine[bj * bcols + bi] === 1;
+  for (const [bi, bj] of blocks) {
+    if (fine[bj * bcols + bi]) { for (let j = 0; j <= S; j += 1) for (let i = 0; i <= S; i += 1) { const q = L(bi * S + i, bj * S + j); if (!used[q]) used[q] = 1; } }
+    else if (isFine(bi - 1, bj) || isFine(bi + 1, bj) || isFine(bi, bj - 1) || isFine(bi, bj + 1)) {
+      const mark = q => { if (!used[q]) used[q] = 1; };
+      mark(L(bi * S + S / 2, bj * S + S / 2)); // the fan's centre
+      if (isFine(bi - 1, bj)) mark(L(bi * S, bj * S + S / 2));
+      if (isFine(bi + 1, bj)) mark(L(bi * S + S, bj * S + S / 2));
+      if (isFine(bi, bj - 1)) mark(L(bi * S + S / 2, bj * S));
+      if (isFine(bi, bj + 1)) mark(L(bi * S + S / 2, bj * S + S));
+    }
+  }
+  readNew();
   if (heights) heights.offset += k;
+  if (adjust) for (let i = 0; i < n; i += 1) if (used[i]) y[i] = adjust(x0 + (i % cols) * step, z0 + Math.floor(i / cols) * step, y[i]);
   const quad = (a, b, d, e, block) => { // a b / d e, split along the diagonal whose ends are closest in height
     if (Math.abs(y[a] - y[e]) < Math.abs(y[b] - y[d])) tris.push(a, d, e, a, e, b); else tris.push(a, d, b, b, d, e);
     triBlock.push(block, block);
@@ -222,50 +234,89 @@ function buildNearGrid(course, { x0, z0, bcols, brows, keepBlock, fineBlock, bey
   return { tiles, order: Float32Array.from(order), vertexCount, triangleCount, lattice };
 }
 
-// `baked`: optional Float32Array of every used vertex height, fine grid first then coarse (from tools/bake-terrain.js).
+// `baked`: optional Float32Array of every used vertex height, coarse grid first then fine (from tools/bake-terrain.js).
+//
+// The two grids never overlap. The coarse one (40 m squares) only keeps squares that come nowhere near the run; every other square, and a
+// ring of squares round them, is covered by the fine one instead. Where they meet, the fine grid's edge is bent onto the coarse grid's edge
+// (blending over FIT metres), so the seam is closed: no gaps, nothing sunk out of sight, nothing poking through.
 export function buildTerrainGrids(course, baked = null) {
   const heights = baked ? Object.assign(baked, { offset: 0 }) : null;
   const pts = course.points;
   const runMinX = Math.min(...pts.map(p => p[0])), runMaxX = Math.max(...pts.map(p => p[0]));
   const runMinZ = Math.min(...pts.map(p => p[1])), runMaxZ = Math.max(...pts.map(p => p[1]));
-  let widest = 0; for (let s = 0; s <= course.length; s += 10) widest = Math.max(widest, course.halfWidth(s));
 
-  // Fine grid over the lane and its walls, in tiles.
-  const ns = GRID.nearStep, reach = widest + GRID.nearBeyond;
-  const nx0 = Math.floor((runMinX - reach) / ns) * ns, nz0 = Math.floor((runMinZ - reach) / ns) * ns;
-  const ncols = Math.ceil((runMaxX + reach - nx0) / ns) + 1, nrows = Math.ceil((runMaxZ + reach - nz0) / ns) + 1;
-  // The mask on a 4x coarser lattice, looked up per vertex.
+  // The coarse grid, and which of its squares the fine grid takes over.
+  const fs = GRID.farStep, fm = GRID.farMargin;
+  const fx0 = Math.floor((runMinX - fm) / fs) * fs, fz0 = Math.floor((runMinZ - fm) / fs) * fs;
+  const fcols = Math.ceil((runMaxX + fm - fx0) / fs) + 1, frows = Math.ceil((runMaxZ + fm - fz0) / fs) + 1;
+  const qcols = fcols - 1, qrows = frows - 1;
+  // Distance past the lane's edge at half the coarse spacing: a square is near the run if any of its corners, edge middles or centre is.
+  const hcols = fcols * 2 - 1, hbeyond = beyondField(course, fs / 2, fx0, fz0, hcols, frows * 2 - 1);
+  const nearRun = new Uint8Array(qcols * qrows);
+  for (let qj = 0; qj < qrows; qj += 1) for (let qi = 0; qi < qcols; qi += 1) {
+    let near = false;
+    for (let j = 0; j <= 2 && !near; j += 1) for (let i = 0; i <= 2; i += 1) if (hbeyond[(qj * 2 + j) * hcols + qi * 2 + i] <= GRID.farHoleBeyond) { near = true; break; }
+    nearRun[qj * qcols + qi] = near ? 1 : 0;
+  }
+  const fineQuad = new Uint8Array(qcols * qrows); // near the run, or next to a square that is
+  let fq0 = Infinity, fq1 = -Infinity, fr0 = Infinity, fr1 = -Infinity;
+  for (let qj = 0; qj < qrows; qj += 1) for (let qi = 0; qi < qcols; qi += 1) {
+    let any = false;
+    for (let dj = -1; dj <= 1 && !any; dj += 1) for (let di = -1; di <= 1; di += 1) {
+      const i = qi + di, j = qj + dj;
+      if (i >= 0 && j >= 0 && i < qcols && j < qrows && nearRun[j * qcols + i]) { any = true; break; }
+    }
+    if (any) { fineQuad[qj * qcols + qi] = 1; fq0 = Math.min(fq0, qi); fq1 = Math.max(fq1, qi); fr0 = Math.min(fr0, qj); fr1 = Math.max(fr1, qj); }
+  }
+  const far = buildGrid(course, {
+    step: fs, x0: fx0, z0: fz0, cols: fcols, rows: frows, heights,
+    keepQuad: a => !fineQuad[Math.floor(a / fcols) * qcols + (a % fcols)] && (a % fcols) < qcols,
+  });
+  const farY = far.lattice.heights;
+  const coarse = (i, j) => farY[j * fcols + i];
+  const isCoarse = (qi, qj) => qi >= 0 && qj >= 0 && qi < qcols && qj < qrows && !fineQuad[qj * qcols + qi];
+
+  // The fine grid over every square the coarse one gave up, lined up with it (16 fine squares to a coarse one).
+  const ns = GRID.nearStep;
+  const nx0 = fx0 + fq0 * fs, nz0 = fz0 + fr0 * fs;
+  const ncols = (fq1 - fq0 + 1) * (fs / ns) + 1, nrows = (fr1 - fr0 + 1) * (fs / ns) + 1;
   const ms = ns * 4, mcols = Math.ceil(ncols / 4) + 2, mrows = Math.ceil(nrows / 4) + 2;
   const mask = beyondField(course, ms, nx0, nz0, mcols, mrows);
-  const nearBeyond = i => {
-    const c = i % ncols, r = Math.floor(i / ncols);
-    return mask[Math.min(mrows - 1, Math.round(r / 4)) * mcols + Math.min(mcols - 1, Math.round(c / 4))];
-  };
-  // A block's corners' distances past the lane's edge, the mask read smoothly (bilinear) so the split band follows the lane closely.
   const maskAt = (c, r) => {
     const u = Math.min(mcols - 1.001, c / 4), v = Math.min(mrows - 1.001, r / 4), i = Math.floor(u), j = Math.floor(v), fu = u - i, fv = v - j;
     const m = (a, b) => mask[b * mcols + a];
     return (m(i, j) * (1 - fu) + m(i + 1, j) * fu) * (1 - fv) + (m(i, j + 1) * (1 - fu) + m(i + 1, j + 1) * fu) * fv;
   };
-  const cornerBeyond = (bi, bj) => Math.min(nearBeyond(bj * ncols + bi), nearBeyond(bj * ncols + bi + 1), nearBeyond((bj + 1) * ncols + bi), nearBeyond((bj + 1) * ncols + bi + 1));
+  const per = fs / ns;
+  // Bend the fine grid onto the coarse one near where they meet: the height the coarse surface has at the nearest point of the nearest
+  // coarse square's edge, blended in over FIT metres.
+  const FIT = 20;
+  const adjust = (x, z, h) => {
+    const qi = Math.floor((x - fx0) / fs), qj = Math.floor((z - fz0) / fs);
+    let best = Infinity, target = h;
+    for (let dj = -1; dj <= 1; dj += 1) for (let di = -1; di <= 1; di += 1) {
+      const i = qi + di, j = qj + dj;
+      if (!isCoarse(i, j)) continue;
+      const ax = fx0 + i * fs, az = fz0 + j * fs; // the coarse square [ax, ax+fs] x [az, az+fs]
+      const px = Math.min(Math.max(x, ax), ax + fs), pz = Math.min(Math.max(z, az), az + fs);
+      const d = Math.hypot(x - px, z - pz);
+      if (d >= best) continue;
+      best = d;
+      // on its edge, the coarse surface is a straight line between the edge's two corners (whichever way its square is split)
+      const u = (px - ax) / fs, v = (pz - az) / fs;
+      if (v <= 1e-9 || v >= 1 - 1e-9) { const jj = v < 0.5 ? j : j + 1; target = coarse(i, jj) * (1 - u) + coarse(i + 1, jj) * u; }
+      else { const ii = u < 0.5 ? i : i + 1; target = coarse(ii, j) * (1 - v) + coarse(ii, j + 1) * v; }
+    }
+    if (best >= FIT) return h;
+    const w = best / FIT, t = w * w * (3 - 2 * w);
+    return target + (h - target) * t;
+  };
   const near = buildNearGrid(course, {
     x0: nx0, z0: nz0, bcols: ncols - 1, brows: nrows - 1, heights, tile: GRID.tile,
-    keepBlock: (bi, bj) => cornerBeyond(bi, bj) < GRID.nearBeyond,
+    keepBlock: (bi, bj) => fineQuad[(fr0 + Math.floor(bj / per)) * qcols + fq0 + Math.floor(bi / per)] === 1,
     fineBlock: (bi, bj) => Math.min(maskAt(bi, bj), maskAt(bi + 1, bj), maskAt(bi, bj + 1), maskAt(bi + 1, bj + 1)) < GRID.laneBeyond,
     beyondAt: maskAt,
-  });
-
-  // Coarse grid out to the horizon, with the corridor cut out (one piece: it's light, and mostly in view anyway).
-  const fs = GRID.farStep, fm = GRID.farMargin;
-  const fx0 = Math.floor((runMinX - fm) / fs) * fs, fz0 = Math.floor((runMinZ - fm) / fs) * fs;
-  const fcols = Math.ceil((runMaxX + fm - fx0) / fs) + 1, frows = Math.ceil((runMaxZ + fm - fz0) / fs) + 1;
-  const fbeyond = beyondField(course, fs, fx0, fz0, fcols, frows);
-  // Where it overlaps the fine grid, the coarse grid is sunk out of sight: its big triangles cut across concave walls metres above the real
-  // surface and would otherwise poke through.
-  const far = buildGrid(course, {
-    step: fs, x0: fx0, z0: fz0, cols: fcols, rows: frows, heights,
-    keepQuad: (a, b, d, e) => Math.max(fbeyond[a], fbeyond[b], fbeyond[d], fbeyond[e]) > GRID.farHoleBeyond,
-    sink: i => GRID.farSink * (1 - Math.min(1, Math.max(0, (fbeyond[i] - GRID.nearBeyond) / GRID.farStep))),
+    adjust,
   });
   if (heights && heights.offset !== heights.length) throw new Error(`Baked terrain has ${heights.length} heights, the grids need ${heights.offset}. Run npm run bake.`);
   return { near, far };

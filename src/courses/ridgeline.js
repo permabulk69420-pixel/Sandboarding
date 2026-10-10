@@ -64,6 +64,33 @@ const SIDE_HITS = [
   [2300, -12], [2365, 14], [2450, -16], [2525, 16], [2600, -14], [2665, 12], // the long finish
 ].map(([at, offset]) => ({ ...SIDE_HIT, at, offset }));
 
+// Landmarks: sandstone formations that give each section its own look (src/landmarks.js). s along the run, side -1 left / 1 right, out =
+// metres from the centre line (always well past the walls, where nobody rides), height and radius in metres.
+const LANDMARKS = [
+  { type: 'hoodoo', s: 60, side: -1, out: 50, height: 26, radius: 4 }, // a pair framing the start
+  { type: 'hoodoo', s: 75, side: 1, out: 54, height: 32, radius: 4.5 },
+  { type: 'fin', s: 300, side: 1, out: 58, height: 20, radius: 6 },
+  { type: 'hoodoo', s: 600, side: -1, out: 48, height: 24, radius: 4 }, // the jump line
+  { type: 'hoodoo', s: 640, side: -1, out: 62, height: 33, radius: 5 },
+  { type: 'hoodoo', s: 690, side: 1, out: 52, height: 20, radius: 3.5 },
+  { type: 'hoodoo', s: 1000, side: 1, out: 88, height: 34, radius: 5 }, // the bowl's rim
+  { type: 'hoodoo', s: 1080, side: -1, out: 90, height: 28, radius: 4.5 },
+  { type: 'hoodoo', s: 1170, side: 1, out: 92, height: 42, radius: 6.5 },
+  { type: 'fin', s: 1440, side: -1, out: 52, height: 26, radius: 7 }, // big jump one
+  { type: 'hoodoo', s: 1470, side: 1, out: 55, height: 30, radius: 4.5 },
+  { type: 'hoodoo', s: 1710, side: 1, out: 46, height: 20, radius: 3.5 }, // the S-bends
+  { type: 'fin', s: 1900, side: -1, out: 36, height: 18, radius: 5 }, // the canyon's rims
+  { type: 'fin', s: 1965, side: 1, out: 36, height: 22, radius: 5 },
+  { type: 'fin', s: 2030, side: -1, out: 38, height: 16, radius: 4.5 },
+  { type: 'hoodoo', s: 2192, side: -1, out: 46, height: 26, radius: 4 }, // a gate over the gap jump
+  { type: 'hoodoo', s: 2192, side: 1, out: 46, height: 24, radius: 4 },
+  { type: 'butte', s: 2900, side: 1, out: 170, height: 45, radius: 60 }, // past the finish
+  { type: 'butte', s: 200, side: -1, out: 800, height: 80, radius: 140 }, // out on the dune sea
+  { type: 'butte', s: 800, side: 1, out: 700, height: 70, radius: 120 },
+  { type: 'butte', s: 1500, side: -1, out: 900, height: 90, radius: 150 },
+  { type: 'butte', s: 2300, side: -1, out: 620, height: 60, radius: 100 },
+];
+
 export default {
   id: 'ridgeline',
   name: 'Ridgeline',
@@ -76,6 +103,7 @@ export default {
   kickers: KICKERS,
   gaps: GAPS,
   sideHits: SIDE_HITS,
+  landmarks: LANDMARKS,
   startS: 50, // the start gate
   pad: { s: 12, across: 20, ahead: 6, behind: 32 }, // the lodge's level pad on the summit (its door 12 m down the line, facing downhill)
   finishS: 2720, // the finish gate (the slope after it is too gentle to keep you moving: the runout)

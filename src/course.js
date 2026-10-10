@@ -325,6 +325,7 @@ export function createCourse(def = COURSES[0]) {
     length, points: pts, heightAt, normalAt, locate, pointAt, elevation, halfWidth,
     id: def.id, name: def.name, startS: def.startS * k, finishS: def.finishS * k, plain: def.plain ?? -16,
     pad: pad && { x: pad.x, z: pad.z, height: pad.height, s: def.pad.s * k },
+    landmarks: (def.landmarks || []).map(l => ({ ...l, s: l.s * k })),
     kickers: kickers.map(kk => kk.at),
     // Stretches where the lane is meant to be steep (kicker ramps and landings, the gap), for tests and anything that wants to know.
     features: [...kickers.map(kk => ({ type: 'kicker', from: kk.at - kk.length, to: kk.at + kk.drop })), ...gaps.map(gp => ({ type: 'gap', from: gp.from, to: gp.to })),
