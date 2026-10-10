@@ -11,9 +11,9 @@ import { clamp, mix, smooth, angleDelta } from './math.js';
 
 export const BOARD = Object.freeze({
   gravity: 9.81,
-  sandFriction: 0.055, // rolling friction coefficient on sand (snow would be ~0.03)
-  airDrag: 0.0058, // per metre: deceleration = airDrag * speed^2 standing up
-  tuckDrag: 0.0043, // crouched
+  sandFriction: 0.026, // rolling friction coefficient on sand (snow would be ~0.03)
+  airDrag: 0.003, // per metre: deceleration = airDrag * speed^2 standing up
+  tuckDrag: 0.0021, // crouched
   edgeGrip: 1.6, // how hard the edge can hold sideways, as a friction coefficient (times your weight on the board)
   carveKeep: 0.94, // share of the speed the edge turns that survives a clean carve (the rest is lost to the sand)
   carveFrom: 0.55, // cosine of the angle between board and travel: below this the board skids...
@@ -29,7 +29,7 @@ export const BOARD = Object.freeze({
   ollieFull: 1.35, // ...a full charge this share
   launchGap: 0.012, // metres above the sand before the ground counts as gone (a little give so tiny ripples don't hop you)
   airTurn: 2.8, // radians per second of spin in the air
-  maxSpeed: 30,
+  maxSpeed: 45,
   substep: 1 / 120,
   bailAngle: 1.15, // radians between the board's line and your travel on landing before it counts as a crash (about 66 degrees)
   flipRate: 5.6, // radians per second of tilt (flip) in the air at full stick: a full flip in a little over a second

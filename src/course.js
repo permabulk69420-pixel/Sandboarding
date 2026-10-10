@@ -67,6 +67,14 @@ const KICKERS = [
 // A trench across the middle of the lane: the gap you jump. Steep on the near side, a long gentle ramp out on the far side (the run keeps
 // falling away under it), so coming up short costs you speed but never traps you.
 const GAPS = [{ from: 2186, to: 2216, depth: 4.5, bottom: 0.3, lane: 10 }];
+// Side hits: small kickers off to one side of the lane (offset in metres, + right of travel), something to pop off on the long stretches.
+const SIDE_HIT = { length: 9, height: 1.4, drop: 6, lane: 3, curve: 2.0 };
+const SIDE_HITS = [
+  [205, 8], [285, -8], // the cruisy first pitch
+  [960, 22], [1030, -18], [1095, 15], [1185, -25], // the bowl
+  [1600, 9], [1685, -9], [1765, 9], // the S-bends
+  [2300, -12], [2365, 14], [2450, -16], [2525, 16], [2600, -14], [2665, 12], // the long finish
+].map(([at, offset]) => ({ ...SIDE_HIT, at, offset }));
 
 // ---------------------------------------------------------------- the centre line
 function catmull(p0, p1, p2, p3, t) {
@@ -137,6 +145,7 @@ export function createCourse() {
   const rollers = ROLLERS.map(r => ({ ...r, from: r.from * k, to: r.to * k }));
   const kickers = KICKERS.map(kk => ({ ...kk, at: kk.at * k }));
   const gaps = GAPS.map(gp => ({ ...gp, from: gp.from * k, to: gp.to * k }));
+  const sideHits = SIDE_HITS.map(sh => ({ ...sh, at: sh.at * k }));
 
   // Per-point tangent and smoothed signed curvature (positive = turning left).
   const tx = new Float64Array(n), tz = new Float64Array(n), rawK = new Float64Array(n);
@@ -196,7 +205,9 @@ export function createCourse() {
 
   const SEG_LEN = new Float64Array(n - 1);
   for (let i = 0; i < n - 1; i += 1) SEG_LEN[i] = Math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]);
-  const OVERSHOOT = 1.2; // a stretch rises this steeply beyond its own ends, so each one only shapes the ground beside it
+  // A stretch rises this steeply beyond its own ends, so each one only shapes the ground beside it. It has to be steep: anything along the
+  // lane taller than this slope times the distance (a kicker's lip, a roller's crest) would otherwise be sliced off by its neighbours.
+  const OVERSHOOT = 3.5;
   const KNEE = 14; // metres beyond the lane where the curved wall hands over to the flank's straight climb
 
   // The shaped surface of one stretch [i, i+1] at world (x, z), before the noise. Continuous in x and z.
@@ -217,9 +228,16 @@ export function createCourse() {
     const roll = mix(R[i], R[j], t), kick = mix(K[i], K[j], t);
     if (roll !== 0) h += roll * (1 - smooth(w - 5, w, ad));
     if (kick !== 0) { const lane = Math.max(KL[i], KL[j]); h += kick * (1 - smooth(lane, lane + 3, ad)); }
+    const s = i + t;
+    for (let q = 0; q < sideHits.length; q += 1) {
+      const sh = sideHits[q];
+      if (s < sh.at - sh.length || s > sh.at + sh.drop) continue;
+      const shape = s <= sh.at ? ((s - (sh.at - sh.length)) / sh.length) ** sh.curve : 1 - smooth(0, 1, (s - sh.at) / sh.drop);
+      h += sh.height * shape * (1 - smooth(sh.lane, sh.lane + 2.5, Math.abs(cross - sh.offset)));
+    }
     const out = Math.max(0, ad - w);
     const gully = 1 - smooth(9, 15, w); // 1 in the narrow gully: taller, steeper walls
-    const steep = COURSE.wallSteep * (1 + 2.2 * gully);
+    const steep = COURSE.wallSteep * (1 + 1.0 * gully); // tall canyon walls, but not so steep they turn to stair steps
     h += out < KNEE ? steep * out * out : steep * KNEE * KNEE + COURSE.flank * (out - KNEE);
     return h + over * OVERSHOOT;
   }
@@ -280,7 +298,9 @@ export function createCourse() {
       const v = stretchHeight(i, x, z); if (v < h) h = v;
       const dd = segDist(i, x, z); if (dd < near) { near = dd; nearI = i; }
     }
-    h = Math.min(h, mountain(x, z, near));
+    // The lower of the channel and the mountain, blended over a few metres so ridge crests are rounded, not knife edges.
+    const m = mountain(x, z, near), blend = Math.max(0, 5 - Math.abs(h - m)) / 5;
+    h = Math.min(h, m) - blend * blend * 1.25;
     // Lumpy dunes on the walls, the mountain and the plain; none in the lane.
     const out = Math.max(0, near - W[nearI]);
     if (out > 0) {
@@ -322,6 +342,7 @@ export function createCourse() {
     startS: COURSE.startS * k, finishS: COURSE.finishS * k,
     kickers: kickers.map(kk => kk.at),
     // Stretches where the lane is meant to be steep (kicker ramps and landings, the gap), for tests and anything that wants to know.
-    features: [...kickers.map(kk => ({ type: 'kicker', from: kk.at - kk.length, to: kk.at + kk.drop })), ...gaps.map(gp => ({ type: 'gap', from: gp.from, to: gp.to }))], bounds: { minX: minX - BOUND, maxX: maxX + BOUND, minZ: minZ - BOUND, maxZ: maxZ + BOUND },
+    features: [...kickers.map(kk => ({ type: 'kicker', from: kk.at - kk.length, to: kk.at + kk.drop })), ...gaps.map(gp => ({ type: 'gap', from: gp.from, to: gp.to })),
+      ...sideHits.map(sh => ({ type: 'side', from: sh.at - sh.length, to: sh.at + sh.drop, offset: sh.offset }))], bounds: { minX: minX - BOUND, maxX: maxX + BOUND, minZ: minZ - BOUND, maxZ: maxZ + BOUND },
   };
 }

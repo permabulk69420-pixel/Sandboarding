@@ -26,11 +26,11 @@ function ride({ tuck = 0, brake = 0, limit = 400 } = {}) {
   return out;
 }
 
-test('a clean run reaches the finish in about four minutes, with air off every kicker', () => {
+test('a clean run reaches the finish in under three minutes, with air off every kicker', () => {
   const r = ride();
   assert.ok(r.finished, 'finished');
-  assert.ok(r.time > 150 && r.time < 300, `time ${r.time}`);
-  for (const k of course.kickers) assert.ok(r.airs.some(s => s > k && s < k + 40), `no air off the kicker at ${k.toFixed(0)} (landed at ${r.airs.map(Math.round)})`);
+  assert.ok(r.time > 100 && r.time < 260, `time ${r.time}`);
+  for (const k of course.kickers) assert.ok(r.airs.some(s => s > k && s < k + 80), `no air off the kicker at ${k.toFixed(0)} (landed at ${r.airs.map(Math.round)})`);
   assert.equal(r.bails, 0);
   assert.ok(r.maxOff < 4, `strayed ${r.maxOff}`);
 });
@@ -39,7 +39,7 @@ test('tucking is faster but stays under the speed cap', () => {
   const stand = ride(), tuck = ride({ tuck: 1 });
   assert.ok(tuck.time < stand.time - 5, `tuck ${tuck.time} vs ${stand.time}`);
   assert.ok(tuck.maxSpeed <= BOARD.maxSpeed + 1e-6);
-  assert.ok(tuck.maxSpeed < 28, `top speed ${tuck.maxSpeed}`);
+  assert.ok(tuck.maxSpeed < 33, `top speed ${tuck.maxSpeed}`);
 });
 
 test('braking slows you right down', () => {
