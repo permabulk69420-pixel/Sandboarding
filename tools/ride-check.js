@@ -30,6 +30,11 @@ for (const def of defs) {
     if (v < 8.3 && slowFrom === null) slowFrom = s;
     if (v >= 8.3 && slowFrom !== null) { if (s - slowFrom >= 150 && s !== Infinity) console.log(`  - slow stretch ${slowFrom}-${s} m (under 30 km/h standing): fine if intended, else steepen`); slowFrom = null; }
   }
+  for (const a of stand.airs) if (a.heavy) flag(`heavy landing at ${a.s.toFixed(0)} m even with the board pitched to meet the ground (${(a.tilt * 57.3).toFixed(0)} degrees off): the landing is steeper or more banked than a rider can match`);
+  { // for interest: the same run with hands off the stick in the air (nothing levels the board, so the big jumps should cost something)
+    const hands = rideCourse(c, { skill: false });
+    console.log(`hands off in the air: ${hands.airs.filter(a => a.heavy).length} heavy landings, ${hands.bails.length} bails (of ${hands.airs.length} airs)${hands.bails.length ? ` at ${hands.bails.map(b => b.s.toFixed(0)).join(', ')} m` : ''}`);
+  }
   for (const a of stand.airs) if (a.impact > 13) console.log(`  - hard landing at ${a.s.toFixed(0)} m (${a.air.toFixed(1)} s of air, ${a.impact.toFixed(0)} m/s into the ground): lengthen or steepen that landing`);
   c.kickers.forEach((k, i) => { if (!stand.airs.some(a => a.s > k && a.s < k + c.kickerReach[i])) flag(`no air off the kicker at ${k.toFixed(0)} m: too slow there, or the lip doesn't point up enough`); });
   // Rails: each one against the rules, then a rider lined up on it from 45 m back (it should be caught at the start and ride it out).

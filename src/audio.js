@@ -36,8 +36,9 @@ export function createRideAudio() {
     scrape.flutter = flutter; scrape.depth = depth;
   }
 
-  // speed in m/s, grounded: on the sand, carve: 0..1 how hard you are turning, grinding: on a rail (the sand is silent then).
-  function update(speed, grounded, carve = 0, grinding = false) {
+  // speed in m/s, grounded: on the sand, carve: 0..1 how hard you are turning, grinding: on a rail (the sand is silent then),
+  // wobble: 0..1 how near the edge of the bar you are (the scrape gets higher, rougher and louder as you go).
+  function update(speed, grounded, carve = 0, grinding = false, wobble = 0) {
     if (!ctx) return;
     const t = ctx.currentTime, v = Math.min(speed / 26, 1.2);
     wind.gain.gain.setTargetAtTime(0.03 + 0.42 * v * v, t, 0.15);
@@ -45,11 +46,11 @@ export function createRideAudio() {
     const sand = grounded && !grinding;
     hiss.gain.gain.setTargetAtTime(sand ? Math.min(0.32, 0.04 + 0.22 * v + 0.12 * carve) : 0, t, sand ? 0.05 : 0.02);
     hiss.filter.frequency.setTargetAtTime(1800 + 1600 * v, t, 0.1);
-    const level = grinding ? Math.min(0.3, 0.1 + 0.2 * v) : 0;
+    const level = grinding ? Math.min(0.36, 0.1 + 0.2 * v + 0.1 * wobble) : 0;
     scrape.gain.gain.setTargetAtTime(level, t, grinding ? 0.03 : 0.05);
     scrape.depth.gain.setTargetAtTime(level * 0.9, t, 0.03);
-    scrape.filter.frequency.setTargetAtTime(1900 + 2600 * v, t, 0.08);
-    scrape.flutter.frequency.setTargetAtTime(38 + 70 * v, t, 0.1);
+    scrape.filter.frequency.setTargetAtTime(1900 + 2600 * v + 1500 * wobble, t, 0.08);
+    scrape.flutter.frequency.setTargetAtTime((38 + 70 * v) * (1 + wobble), t, 0.08);
   }
 
   // The clang of landing on a rail: a burst of noise and two ringing partials, louder the harder you came down (strength 0 to 1).
