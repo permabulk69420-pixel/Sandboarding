@@ -5,7 +5,7 @@ import { createBoardState, stepBoard, speedOf, BOARD } from './board.js';
 import { clamp, angleDelta } from './math.js';
 import { createSky, createTerrain, LOOK } from './world.js';
 import { createGate, createLaneFlags, createBoardMesh, loadBoardModel } from './props.js';
-import { createWristPanel, createSign, formatTime } from './hud.js';
+import { createSign, formatTime } from './hud.js';
 import { createRideAudio } from './audio.js';
 import { createInput } from './input.js';
 import { createVRHands } from './hands.js';
@@ -18,7 +18,7 @@ import { pulseHaptics } from './haptics.js';
 
 const params = new URLSearchParams(location.search);
 const BASE = import.meta.env?.BASE_URL ?? './';
-const RUN = Object.freeze({ name: 'Ridgeline', checkpointEvery: 120, countdown: 3, walkSpeed: 3.2, snapTurn: Math.PI / 6, eye: 1.65 });
+const RUN = Object.freeze({ name: 'Ridgeline', checkpointEvery: 120, countdown: 3, walkSpeed: 3.2, turnSpeed: 2.2, eye: 1.65 });
 
 // ---------------------------------------------------------------- renderer, scene, player rig
 const canvas = document.getElementById('world');
@@ -65,7 +65,6 @@ const puffs = createSandPuffs({ scene, sun: { value: LOOK.sun }, heightAt: cours
 const audio = createRideAudio();
 const input = createInput();
 const hands = createVRHands({ renderer, scene, parent: rig });
-const wrist = createWristPanel();
 
 // Signs in the world: one beside the start gate, one past the finish.
 const startSign = createSign();
@@ -163,11 +162,11 @@ addEventListener('resize', () => { if (renderer.xr.isPresenting) return; camera.
 const tmpN = new THREE.Vector3(), tmpF = new THREE.Vector3(), tmpR = new THREE.Vector3(), basis = new THREE.Matrix4();
 const smoothUp = new THREE.Vector3(0, 1, 0);
 const headWorld = new THREE.Vector3();
-let lastTime = 0, snapReady = true;
+let lastTime = 0;
 
 function handsPulse(strength, ms) { for (const s of hands.states) pulseHaptics(s, strength, ms); }
 
-function wristLines() {
+function statusLines() {
   const best = store.best;
   if (mode === 'summit') {
     const g = course.pointAt(course.startS);
@@ -209,16 +208,13 @@ function frame(time) {
   }
 
   if (mode === 'summit') {
-    // Walk: left stick (or WASD) relative to where you look; snap turn on the right stick.
+    // Walk: left stick (or WASD) relative to where you look; the right stick turns smoothly.
     camera.getWorldDirection(tmpF); tmpF.y = 0; tmpF.normalize();
     tmpR.set(-tmpF.z, 0, tmpF.x);
     const mx = inp.moveX, mz = inp.moveZ;
     rig.position.addScaledVector(tmpF, -mz * RUN.walkSpeed * dt).addScaledVector(tmpR, mx * RUN.walkSpeed * dt);
     rig.position.y = course.heightAt(rig.position.x, rig.position.z);
-    if (session) {
-      if (Math.abs(inp.turn) > 0.7 && snapReady) { rigYaw -= Math.sign(inp.turn) * RUN.snapTurn; snapReady = false; }
-      if (Math.abs(inp.turn) < 0.3) snapReady = true;
-    } else rigYaw -= inp.turn * 1.8 * dt;
+    rigYaw -= inp.turn * RUN.turnSpeed * dt; // smooth turning
     rig.rotation.y = rigYaw;
     const g = course.pointAt(course.startS);
     camera.getWorldPosition(headWorld);
@@ -303,13 +299,7 @@ function frame(time) {
     rig.position.set(board.x - (c * headOffset.x + s * headOffset.y), board.y + 0.04, board.z - (-s * headOffset.x + c * headOffset.y));
   }
 
-  // The wrist panel lives on whichever controller is the left hand.
-  const left = hands.states.find(st => st.handedness === 'left');
-  if (left && wrist.mesh.parent !== left.grip) left.grip.add(wrist.mesh);
-  wrist.mesh.visible = Boolean(left);
-  const lines = wristLines();
-  wrist.draw(lines);
-  if (!session && playing) hudText.textContent = lines.map(l => l.text).join('   ·   ');
+  if (!session && playing) hudText.textContent = statusLines().map(l => l.text).join('   ·   ');
 
   hands.update(dt);
   puffs.update(dt);

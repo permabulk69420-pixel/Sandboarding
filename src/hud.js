@@ -1,7 +1,6 @@
 import * as THREE from 'three';
 
-// Text on canvases: a small panel on the left wrist (time, speed, prompts) and a big sign in the world (results at the finish, the
-// prompt at the start gate). Redrawn only when the text changes.
+// Text on canvases: signs in the world (results at the finish, the prompt at the start gate). Redrawn only when the text changes.
 
 export const formatTime = t => {
   if (!Number.isFinite(t)) return '--:--.--';
@@ -36,14 +35,6 @@ function createPanel({ width, height, pxPerMetre = 2400, background = 'rgba(18, 
     texture.needsUpdate = true;
   }
   return { mesh, draw };
-}
-
-export function createWristPanel() {
-  const panel = createPanel({ width: 0.13, height: 0.075 });
-  // Sits on the back of the left wrist, facing you when you look at your watch.
-  panel.mesh.position.set(0.0, 0.035, 0.07);
-  panel.mesh.rotation.set(-Math.PI / 2 + 0.35, 0, Math.PI / 2);
-  return panel;
 }
 
 export function createSign({ width = 3.2, height = 1.2 } = {}) {
