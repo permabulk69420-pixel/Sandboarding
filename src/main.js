@@ -13,6 +13,7 @@ import { createInput } from './input.js';
 import { createVRHands } from './hands.js';
 import { createSandPuffs } from './sand-puffs.js';
 import { pulseHaptics } from './haptics.js';
+import { createBoardGrab } from './board-grab.js';
 
 // Sandboarding, first run. You stand on the summit, walk to the start gate, press A to drop in, and ride the course to the finish
 // against the clock. Thumbstick to carve, trigger to drag the tail and slow down, crouch for speed, A to hop, B back to the last
@@ -83,6 +84,8 @@ const puffs = createSandPuffs({ scene, sun: sunUniform, heightAt: course.heightA
 const audio = createRideAudio();
 const input = createInput();
 const hands = createVRHands({ renderer, scene, parent: rig });
+const grab = createBoardGrab({ hands, boardMesh });
+let frozen = false; // dev only (?grabtest): the board hangs where it is
 
 // Signs in the world: one beside the start gate, one past the finish.
 const startSign = createSign();
@@ -284,15 +287,21 @@ function frame(time) {
       }
       if (inp.aReleased && charge > 0) { if (board.grounded && mode === 'ride') ollie = charge; charge = 0; }
       if (!board.grounded) charge = 0;
-      stepBoard(board, { steer, brake, tuck, ollie, pitch: inp.pitch }, course, dt);
+      if (!frozen) stepBoard(board, { steer, brake, tuck, ollie, pitch: inp.pitch }, course, dt);
       const speed = speedOf(board);
 
       for (const e of board.events) {
+        if (e.type === 'launch') grab.clearLog();
+        if (e.type === 'land' && grab.holding()) {
+          // Still holding the board when it hits the sand: it's torn out of your hand, and that costs a little speed.
+          grab.releaseAll(); board.vx *= 0.92; board.vy *= 0.92; board.vz *= 0.92; e.impact += 1.5;
+        }
         if (e.type === 'land') {
           const hit = Math.min(1, e.impact / 8 + (e.heavy ? 0.35 : 0)); // a heavy (badly angled) landing hits harder
           audio.thump(hit); if (e.impact > 2 || e.heavy) puffs.impact(board.x, board.z, { size: 0.7, strength: hit }); handsPulse(Math.min(1, 0.25 + hit * 0.7), e.heavy ? 110 : 60);
         }
         if (e.type === 'bail') {
+          grab.releaseAll();
           // A crash: thump, sand everywhere, then a quick fade and you're back on your feet on the run, a little slower.
           audio.thump(1); puffs.impact(board.x, board.z, { size: 1.2, strength: 1 }); handsPulse(1, 200);
           if (mode === 'ride') fadeThen(() => {
@@ -375,7 +384,11 @@ function frame(time) {
 
   if (!session && playing) hudText.textContent = statusLines().map(l => l.text).join('   ·   ');
 
+  // Grabs: the board comes up to a squeezing hand in the air (after the physics has placed it), then the hands are fitted onto it.
+  const riding = mode === 'ride' || mode === 'finished';
+  if (riding) grab.update(dt, mode === 'ride' && !board.grounded); else if (grab.holding()) grab.releaseAll();
   hands.update(dt);
+  grab.place();
   puffs.update(dt);
   worldTime.value = (time / 1000) % 3600;
   if (windSand) { camera.getWorldPosition(headWorld); windSand.update(time / 1000, headWorld, session ? WIND_SAND.vrViewHeight : renderer.domElement.height); }
@@ -393,4 +406,5 @@ if (params.has('fly')) { // ?fly=x,y,z,yaw,pitch: a free camera for looking at t
   mode = 'fly'; rig.position.set(x, y, z); rigYaw = yaw || 0; rig.rotation.y = rigYaw; camera.rotation.x = pitch || 0;
 }
 renderer.setAnimationLoop(frame);
+if (params.has('grabtest')) import('./dev-grab-test.js').then(m => m.grabTest({ params, hands, rig, camera, grab, boardMesh, board: () => board, freeze: () => { frozen = true; } }));
 window.__sand = { course, get board() { return board; }, get mode() { return mode; }, camera, rig, BOARD };
