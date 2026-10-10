@@ -14,12 +14,27 @@ Sandboarding down desert mountains in VR (WebXR, three.js, Vite). Every run is p
 
 ## Rails
 
-Every run has a few steel rails beside the lane. Ride up the striped ramp at the start of one, or jump onto it from anywhere along its length,
-and you grind: the bar carries you the way it runs, with sparks, a rasp of steel and a buzz in both controllers, and gravity and the bar's slick
-friction are all that act on you (no steering: you're on a rail). Hop off with A (hold it to charge a bigger pop) or ride off the end, where
-the bar sinks back into the sand. A rail catches you if you are within a metre of it, coming down onto it (not rising through it), travelling
-roughly along it (within 45 degrees), faster than a walk and not upside down; the rest of your speed is turned along the bar. The finish sign
-adds up how far you ground. Stand-alone physics: `src/rails.js` (the bars) and `src/board.js` (the grind).
+Every run has a few steel rails beside the lane. Ride up the striped ramp at the start of one, or jump and land the board on it, and you grind
+(sparks, a rasp of steel, a buzz in both controllers). Nothing lines you up: the board stays at whatever angle you land it, so along the bar
+is a 50-50 and across it is a boardslide (turn in the air with the stick to choose). A rail catches you only if the bar passes under the board
+as it lies (a sideways board reaches further than a lengthways one), you are coming down onto it, travelling roughly along it (within 60
+degrees) and faster than a walk.
+
+On the bar you have to keep your balance. The board is always trying to roll off the bar and the bar knocks it about, and the stick rolls it
+back (push right and it rolls right, so push against the way it is tipping); landing off to one side starts you off balance that way. You can
+see the board tip and your body sway off the bar, the hand on the side you are falling toward buzzes harder as you near the edge, and the
+scrape gets higher and rougher. Lose it and you slip off the side, losing some speed (not a crash). Long grinds get harder. Hop off with A (hold
+it to charge a bigger pop; the board eases round to point the way you are going so a boardslide can pop out and land) or ride off the end,
+where the bar sinks back into the sand. Gravity and the bar's slick friction decide your speed. The finish sign adds up how far you ground.
+Stand-alone physics: `src/rails.js` (the bars) and `src/board.js` (the grind and the balance, all in `BOARD`); the tests ride a perfect balancer
+(`perfectBalance`) and check that one with no stick falls off.
+
+## Landing
+
+Nothing levels the board in the air: it keeps the angle it left the ground at, and you pitch it with the stick (a small push is gentle, a full
+push a fast flip) to meet the ground you are about to land on. Within about 24 degrees of the slope is a clean landing, up to about 47 degrees is
+a heavy one that costs speed, and past that is a bail. Most big jumps need the nose brought down to meet the landing. `perfectLanding` in
+`src/board.js` is the stick a perfect rider uses; the tests and `npm run ride-check` use it (and report what a rider with hands off does).
 
 ## Working on it
 

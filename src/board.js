@@ -11,9 +11,10 @@
 // So smooth, early turns carve and keep your speed; yanking the stick at full speed is a skid (which is also how you check your speed).
 // The old, direct steering is still here as the "classic" feel (useFeel('classic'), or ?feel=classic in the game).
 // If the ground falls away faster than you do (a kicker's lip, the crest of a roller at speed) you are in the air until you come down.
-// Land on a rail (src/rails.js), or ride up the ramp at its start, and you grind: the bar carries you along its length, gravity and the
-// bar's slick friction are all that act on you, and you leave by hopping off or by running out of rail. A rail catches a board that is
-// close to it, coming down (not rising) and travelling roughly along it, and turns the rest of your speed into the bar's direction.
+// Land the board on a rail (src/rails.js), or ride up the ramp at its start, and you grind: the bar carries you along its length, gravity and
+// the bar's slick friction are all that act on you. Nothing lines you up: the board stays at whatever angle you landed it (along the bar is a
+// 50-50, across it a boardslide), and you have to keep your balance: the board is always trying to roll off the bar, and the stick rolls it
+// back. Fall too far and you slip off the side. You leave by hopping off, by running out of rail, or by slipping.
 // Everything is per second and lives in BOARD so it is easy to tune.
 
 import { clamp, mix, smooth, angleDelta } from './math.js';
@@ -50,23 +51,44 @@ export const BOARD = Object.freeze({
   bailAngle: 1.15, // radians between the board's line and your travel on landing before it counts as a crash (about 66 degrees)
   flipRate: 5.6, // radians per second of tilt (flip) in the air at full stick: a full flip in a little over a second
   flipResponse: 7, // per second: how quickly the tilt follows the stick
-  settle: 6, // per second: with the stick centred, how quickly the board lines up with the ground below you
-  landClean: 0.52, // radians (30 degrees) between the board and the ground on landing that still counts as clean...
-  landBail: 0.96, // ...and beyond this (55 degrees) you bail; in between is a heavy landing
+  settle: 0, // per second: how quickly the board levels itself with the ground below you in the air. Nothing does by default: it keeps the angle it left the ground at and you pitch it with the stick to meet the landing
+  landClean: 0.42, // radians (24 degrees) between the board and the ground on landing that still counts as clean...
+  landBail: 0.82, // ...and beyond this (47 degrees) you bail; in between is a heavy landing
   heavyKeep: 0.72, // share of your speed a heavy landing keeps
-  // Rails (src/rails.js)
+  // Rails (src/rails.js): catching
   railFriction: 0.012, // friction coefficient of a waxed bar (sand is 0.026): slicker than the ground, so a long grind keeps your speed
-  railReach: 1.0, // metres to either side of the bar that still catch the board
+  railHalfWidth: 0.55, // how far to either side of the bar the board reaches when it lies along it...
+  railHalfLength: 0.85, // ...and when it lies across it: the bar has to pass under the board, so a sideways board catches a wider miss
+  railRamp: 1.0, // riding up the striped ramp, anywhere on its stripes (or with the edge of the board on them) catches you
   railBelow: 0.3, // the board may be this far below the bar's top (riding up its ramp) and still be caught...
-  railAbove: 0.5, // ...or this far above it (coming down onto it)
+  railAbove: 0.4, // ...or this far above it (coming down onto it)
   railRise: 1.0, // but not while it is still rising faster than this (m/s, relative to the bar): you can't hook a rail from underneath
-  railAngle: 0.7, // cosine of the angle between your travel and the bar: caught only within about 45 degrees of its direction
+  railAngle: 0.5, // cosine of the angle between your travel and the bar: you have to be travelling roughly along it (within 60 degrees), at any angle of board
   railMinSpeed: 2, // m/s: slower than this you just step over it
   railTilt: 0.9, // radians of flip you can be turned over by (about 50 degrees) and still land on a bar
   railCool: 0.3, // seconds after leaving a bar before any bar can catch you again
-  railTurn: 3.2, // radians per second the board swings round to lie along the bar
-  railSnap: 10, // per second: how quickly you slide onto the bar's line after landing a little to one side of it or above it...
-  railSnapMax: 4, // ...but never faster than this many metres per second, so being caught off to one side is a glide and not a jolt
+  railDrop: 12, // per second: how quickly you settle down onto the bar after landing a little above it...
+  railDropMax: 3, // ...but never faster than this many metres per second
+  railCentre: 1.5, // per second: how quickly the bar works its way to the middle of the board if you landed off to one side...
+  railCentreMax: 0.7, // ...and never faster than this: a slow slide, not a jolt
+  // Rails: balance. The board is always trying to roll off the bar (an upturned broom); the stick rolls it back (push right, it rolls right).
+  railLean: 0.5, // how far off balance you start, as a share of the way to falling, when you land at the very edge of what catches
+  railFall: 2.4, // per second squared: how hard a board lying along the bar tips over...
+  railFallAcross: 1.8, // ...and one lying across it (steadier: it sits on a wider base)
+  railPush: 8, // per second squared: how hard the stick rolls the board back at full push
+  railDamp: 0.7, // per second: the roll settles a little by itself
+  railShake: 1.0, // per second squared: the bar's little knocks (they build up over the first couple of seconds, and get a bit bigger with speed)
+  railShakeStart: 0.3, // the share of the knocks you get in the first moments
+  railShakeIn: 2.5, // seconds for them to build to full
+  railHarder: 14, // seconds over which a long grind gets harder...
+  railHarderBy: 0.7, // ...until the board tips over this much more readily and the knocks are this much bigger
+  railStall: 0.8, // m/s: slower than this along the bar for railStallFor seconds and you slide off
+  railStallFor: 0.7,
+  railSlipSide: 1.4, // m/s: how fast you roll off the side when you lose your balance
+  railSlipKeep: 0.7, // and the share of your speed you keep
+  railSlipCool: 0.8, // seconds before a bar can catch you again after a slip
+  railRealign: 0.7, // seconds after leaving a bar that the board eases round to point the way you are going (so a boardslide can pop out and land)...
+  railRealignRate: 7, // ...at up to this many radians per second (unless you steer it yourself)
 });
 
 // The original feel: the stick turns the nose directly, grips fully at once, and a skid costs only the speed it turns away.
@@ -80,7 +102,8 @@ export function createBoardState({ x = 0, y = 0, z = 0, yaw = 0, speed = 0 } = {
   return {
     x, y, z, vx: fx * speed, vy: 0, vz: fz * speed, yaw, steer: 0, edge: 0, grounded: true, air: 0, nx: 0, ny: 1, nz: 0, events: [],
     pitch: 0, pitchVel: 0, upx: 0, upy: 1, upz: 0, yaw0: yaw, // in the air: tilt from the ground's angle below, and the yaw you left at
-    grind: null, grindCool: 0, // on a rail: { rail, index, u, vt, time, distance, ox, oy, oz } while you are on one; seconds until a rail can catch you again
+    grind: null, grindCool: 0, // on a rail: { rail, index, u, vt, time, distance, ox, oy, oz, rel, bal, balv, ... } while you are on one; seconds until a rail can catch you again
+    realign: 0, // seconds left of easing the board round to your travel after leaving a rail
   };
 }
 
@@ -122,22 +145,36 @@ function takeOff(st, ollie) {
 const rs = { x: 0, y: 0, z: 0, tx: 0, ty: 0, tz: -1 }; // scratch: a place on a rail
 const rn = { u: 0, d: 0 };
 
+// What to call a grind from how the board lies against the bar (`rel`, radians): along it is a 50-50, across it a boardslide.
+export function grindName(rel) {
+  const along = Math.abs(Math.cos(rel));
+  return along > 0.85 ? '50-50' : along < 0.5 ? 'Boardslide' : 'Slide';
+}
+
+// What a perfect rider's stick does to hold a grind: pushes against the roll (and against how fast it is rolling). The tests and the
+// autopilot ride with it; a person does worse and falls off sometimes, which is the point.
+export const perfectBalance = (bal, balv) => clamp(-(0.8 * bal + 0.35 * balv), -1, 1);
+
 // Puts the board where its rail says: on the bar (plus whatever of the landing's offset is still sliding out), going along it, with its "up"
-// square to the bar's slope (straight up, tipped only forwards or back).
+// square to the bar's slope (straight up, tipped only forwards or back). The board's yaw stays where it was when it landed, relative to the bar.
 function ride(st, gr) {
   railAt(gr.rail, gr.u, rs);
   st.x = rs.x + gr.ox; st.y = rs.y + gr.oy; st.z = rs.z + gr.oz;
   st.vx = rs.tx * gr.vt; st.vy = rs.ty * gr.vt; st.vz = rs.tz * gr.vt;
   const l = Math.sqrt(Math.max(1e-9, 1 - rs.ty * rs.ty));
   st.nx = -rs.ty * rs.tx / l; st.ny = (1 - rs.ty * rs.ty) / l; st.nz = -rs.ty * rs.tz / l;
+  st.yaw = railYaw(rs.tx, rs.tz) + gr.rel + (gr.vt < 0 ? Math.PI : 0);
 }
 
-// Is a rail close enough, and is the board coming at it the right way, to be caught? In the air a bar catches you coming down onto it; on the
-// ground only the first few metres do, where it rises out of the sand. `airborne` says which.
+// Is the board over a rail, coming down onto it (not rising through it) and travelling roughly along it? Nothing pulls you in: the bar has to
+// pass under the board as it lies, so lining up is up to you. In the air a bar catches you coming down onto it; on the ground only the first
+// few metres do, where it rises out of the sand (and anywhere on the ramp's stripes will do). `airborne` says which.
 function tryGrind(st, rails, airborne) {
   if (st.grindCool > 0 || st.grind) return false;
-  const speed = speedOf(st), reach = BOARD.railReach;
+  const speed = speedOf(st);
   if (speed < BOARD.railMinSpeed) return false;
+  const reach = Math.max(BOARD.railHalfLength, BOARD.railRamp) + 0.2;
+  const fx = -Math.sin(st.yaw), fz = -Math.cos(st.yaw);
   for (let r = 0; r < rails.length; r += 1) {
     const rail = rails[r];
     if (st.x < rail.minX - reach || st.x > rail.maxX + reach || st.z < rail.minZ - reach || st.z > rail.maxZ + reach) continue;
@@ -147,6 +184,13 @@ function tryGrind(st, rails, airborne) {
     railAt(rail, rn.u, rs);
     const dy = st.y - rs.y;
     if (dy > BOARD.railAbove || dy < -BOARD.railBelow) continue;
+    // How far the board's body reaches across the bar: its width when it lies along it, its length when it lies across it.
+    const tl = Math.hypot(rs.tx, rs.tz) || 1, tx = rs.tx / tl, tz = rs.tz / tl;
+    const alongBar = Math.abs(fx * tx + fz * tz), acrossBar = Math.sqrt(Math.max(0, 1 - alongBar * alongBar));
+    let width = BOARD.railHalfWidth * alongBar + BOARD.railHalfLength * acrossBar;
+    if (!airborne) width = Math.max(width, BOARD.railRamp);
+    const side = (st.x - rs.x) * -tz + (st.z - rs.z) * tx; // metres right of the bar, seen from above (right of travel along it)
+    if (Math.abs(side) > width) continue;
     const vt = st.vx * rs.tx + st.vy * rs.ty + st.vz * rs.tz;
     if (vt < speed * BOARD.railAngle) continue; // across it, or going the wrong way
     const l = Math.sqrt(Math.max(1e-9, 1 - rs.ty * rs.ty));
@@ -154,32 +198,57 @@ function tryGrind(st, rails, airborne) {
     if (vn > BOARD.railRise) continue;
     if (airborne) { if (Math.abs(angleDelta(0, st.pitch)) > BOARD.railTilt) continue; } // turned over mid-flip
     else if (rn.u > rail.entry + 1) continue;
-    const air = st.air;
+    const air = st.air, impact = Math.max(0, -vn);
     // Lifted up onto a bar that stands above you (riding up its ramp) is paid for out of your speed, as being lifted onto the sand is.
     const lift = Math.max(0, -dy), keep = vt > 1e-6 ? Math.sqrt(Math.max(0, vt * vt - 2 * BOARD.gravity * lift)) : 0;
-    st.grind = { rail, index: r, u: rn.u, vt: keep, time: 0, distance: 0, ox: st.x - rs.x, oy: st.y - rs.y, oz: st.z - rs.z };
+    const rel = angleDelta(railYaw(rs.tx, rs.tz), st.yaw);
+    // You start as far off balance as you landed off the middle (toward the heavy side), and a hard landing sets you rocking.
+    const seed = r * 1.7 + rn.u * 0.37, lean = clamp(side / width, -1, 1);
+    const toward = lean !== 0 ? Math.sign(lean) : (Math.sin(seed * 91.7) >= 0 ? 1 : -1);
+    st.grind = {
+      rail, index: r, u: rn.u, vt: keep, time: 0, distance: 0, ox: st.x - rs.x, oy: st.y - rs.y, oz: st.z - rs.z,
+      rel, bal: lean * BOARD.railLean, balv: toward * Math.min(1.2, impact * 0.1), seed, slow: 0, name: grindName(rel),
+    };
     st.grounded = true; st.air = 0; st.pitch = 0; st.pitchVel = 0;
     ride(st, st.grind);
-    st.events.push({ type: 'grind', phase: 'start', rail: r, speed: keep, impact: Math.max(0, -vn), air });
+    st.events.push({ type: 'grind', phase: 'start', rail: r, speed: keep, impact, air, rel, name: st.grind.name, bal: st.grind.bal });
     return true;
   }
   return false;
 }
 
-// Off the bar: hopped off ('jump', with the share of a full pop), ran out of rail ('end') or slid back off its start ('back').
+// Off the bar: hopped off ('jump', with the share of a full pop), ran out of rail ('end'), slid back off its start ('back'), or lost your
+// balance and rolled off the side ('slip', which is also what happens if you stall on it).
 function leaveRail(st, ground, reason, pop = 0) {
   const gr = st.grind;
-  st.grind = null; st.grindCool = BOARD.railCool;
-  st.events.push({ type: 'grind', phase: 'end', rail: gr.index, reason, time: gr.time, distance: gr.distance, speed: gr.vt });
+  st.grind = null; st.grindCool = BOARD.railCool; st.realign = BOARD.railRealign;
+  st.events.push({ type: 'grind', phase: 'end', rail: gr.index, reason, time: gr.time, distance: gr.distance, speed: gr.vt, name: gr.name, bal: gr.bal });
   if (reason === 'jump') {
     const p = BOARD.ollie * pop;
     st.vx += st.nx * p; st.vy += st.ny * p; st.vz += st.nz * p;
     takeOff(st, true);
-  } else if (st.y - ground.heightAt(st.x, st.z) > BOARD.launchGap) takeOff(st, false); // off the end of a bar that stands clear of the sand
+    return;
+  }
+  if (reason === 'slip') {
+    const l = Math.hypot(rs.tx, rs.tz) || 1, dir = gr.bal >= 0 ? 1 : -1; // rolls off to the right of the bar (right of travel is (-tz, tx)) or the left
+    st.vx = st.vx * BOARD.railSlipKeep - rs.tz / l * dir * BOARD.railSlipSide;
+    st.vz = st.vz * BOARD.railSlipKeep + rs.tx / l * dir * BOARD.railSlipSide;
+    st.vy *= BOARD.railSlipKeep;
+    st.grindCool = BOARD.railSlipCool;
+  }
+  if (st.y - ground.heightAt(st.x, st.z) > BOARD.launchGap) takeOff(st, false); // off the end of a bar that stands clear of the sand
   // else the bar ended in the sand and you ride on
 }
 
-// One substep on a rail. Gravity pulls you along it, the bar's friction and the air hold you back; nothing else acts on you (no steering).
+// Moves a landing's offset from the bar toward nothing: exponentially, but never faster than `cap` metres per second.
+function slideOut(v, rate, cap, dt) {
+  const a = Math.abs(v);
+  if (a < 1e-9) return 0;
+  return Math.sign(v) * Math.max(0, a - Math.min(a * (1 - Math.exp(-rate * dt)), cap * dt));
+}
+
+// One substep on a rail. Gravity pulls you along it, the bar's friction and the air hold you back; the board tries to roll off, and the
+// stick rolls it back. Nothing steers you and nothing turns the board.
 function grindStep(st, ground, tuck, dt, ollie) {
   const gr = st.grind;
   railAt(gr.rail, gr.u, rs);
@@ -188,20 +257,37 @@ function grindStep(st, ground, tuck, dt, ollie) {
   vt = vt > 0 ? Math.max(0, vt - slow) : Math.min(0, vt + slow);
   gr.vt = clamp(vt, -BOARD.maxSpeed, BOARD.maxSpeed);
   gr.u += gr.vt * dt; gr.time += dt; gr.distance += Math.abs(gr.vt) * dt;
-  const off = Math.hypot(gr.ox, gr.oy, gr.oz);
-  if (off > 1e-9) { // slide onto the bar's line: exponentially, but at most railSnapMax metres per second
-    const f = Math.max(0, 1 - Math.min(off * (1 - Math.exp(-BOARD.railSnap * dt)), BOARD.railSnapMax * dt) / off);
-    gr.ox *= f; gr.oy *= f; gr.oz *= f;
-  }
+  // The landing's offset works out: straight down onto the bar quickly, and across to the middle of the board slowly.
+  gr.oy = slideOut(gr.oy, BOARD.railDrop, BOARD.railDropMax, dt);
+  const h = Math.hypot(gr.ox, gr.oz);
+  if (h > 1e-9) { const k = slideOut(h, BOARD.railCentre, BOARD.railCentreMax, dt) / h; gr.ox *= k; gr.oz *= k; }
+  // Balance: it tips over by itself (the more it is tipped the harder), the bar knocks it about a little, and the stick rolls it back.
+  // `bal` runs from -1 (falling off to the left) to 1 (the right); at either end you slip.
+  const across = Math.abs(Math.sin(gr.rel)), t = gr.time, harder = 1 + BOARD.railHarderBy * smooth(0, BOARD.railHarder, t);
+  const knocks = BOARD.railShake * mix(BOARD.railShakeStart, 1, smooth(0, BOARD.railShakeIn, t)) * harder * (0.75 + 0.25 * clamp(Math.abs(gr.vt) / 20, 0, 1))
+    * (0.6 * Math.sin(t * 4.4 + gr.seed) + 0.4 * Math.sin(t * 11.9 + gr.seed * 1.7));
+  gr.balv += (mix(BOARD.railFall, BOARD.railFallAcross, across) * harder * gr.bal + knocks + BOARD.railPush * st.steer) * dt;
+  gr.balv *= Math.exp(-BOARD.railDamp * dt);
+  gr.bal += gr.balv * dt;
+  gr.slow = Math.abs(gr.vt) < BOARD.railStall ? gr.slow + dt : 0;
   const end = gr.u >= gr.rail.length, back = gr.u <= 0 && gr.vt <= 0;
   if (end) gr.u = gr.rail.length; else if (back) gr.u = 0;
   ride(st, gr);
-  // The board swings round to lie along the bar (backwards if you are sliding back down it).
-  const want = railYaw(rs.tx, rs.tz) + (gr.vt < 0 ? Math.PI : 0);
-  st.yaw += clamp(angleDelta(st.yaw, want), -BOARD.railTurn * dt, BOARD.railTurn * dt);
   if (ollie !== false) leaveRail(st, ground, 'jump', mix(BOARD.ollieTap, BOARD.ollieFull, ollie));
+  else if (Math.abs(gr.bal) >= 1 || gr.slow > BOARD.railStallFor) leaveRail(st, ground, 'slip');
   else if (end) leaveRail(st, ground, 'end');
   else if (back) leaveRail(st, ground, 'back');
+}
+
+// What a perfect rider's stick does in the air: where will the board come down (a ballistic guess), and how far is it from lying on that ground?
+// Pushes the nose up or down to meet it. The tests and the autopilot land with it; nothing in the game does it for you.
+const aimAt = { f: { x: 0, y: 0, z: -1 }, u: { x: 0, y: 1, z: 0 } };
+export function perfectLanding(st, ground) {
+  let x = st.x, y = st.y, z = st.z, vy = st.vy;
+  for (let t = 0; t < 10; t += 0.05) { x += st.vx * 0.05; y += vy * 0.05; z += st.vz * 0.05; vy -= BOARD.gravity * 0.05; if (y <= ground.heightAt(x, z)) break; }
+  const nm = ground.normalAt(x, z), a = boardAttitude(st, aimAt);
+  const toward = -Math.atan2(nm.x * a.f.x + nm.y * a.f.y + nm.z * a.f.z, nm.x * a.u.x + nm.y * a.u.y + nm.z * a.u.z); // radians of nose-up still wanted
+  return clamp(toward * 2.2 - st.pitchVel * 0.12, -1, 1);
 }
 
 // Which way the board faces: { f: forward (nose), u: up }. On the ground it lies on the sand. In the air it starts from the ground's angle
@@ -229,6 +315,15 @@ function substep(st, input, ground, dt, ollie) {
   if (st.grindCool > 0) st.grindCool -= dt;
   if (st.grind) { grindStep(st, ground, tuck, dt, ollie); return; }
   let speed = speedOf(st);
+  if (st.realign > 0) { // just off a rail: the board eases round to point the way you are going (either end first), unless you take over
+    st.realign -= dt;
+    if (st.realign < BOARD.railRealign - 0.25 && Math.abs(st.steer) > 0.4) st.realign = 0;
+    else if (speed > 1.5) {
+      let d = angleDelta(st.yaw, Math.atan2(-st.vx, -st.vz));
+      if (Math.abs(d) > Math.PI / 2) d -= Math.sign(d) * Math.PI;
+      st.yaw += clamp(d, -BOARD.railRealignRate * dt, BOARD.railRealignRate * dt);
+    }
+  }
 
   if (st.grounded) {
     ground.normalAt(st.x, st.z, n);
@@ -282,14 +377,17 @@ function substep(st, input, ground, dt, ollie) {
     const s = speedOf(st);
     if (s > 1e-6) { const s2 = Math.max(0, s - BOARD.airDrag * s * s * dt); const k = s2 / s; st.vx *= k; st.vy *= k; st.vz *= k; }
     st.yaw -= st.steer * BOARD.airTurn * dt;
-    // Flip: the stick tilts the board about its side axis. The starting angle drifts toward the ground below so a plain jump lands square.
-    const target = clamp(input.pitch || 0, -1, 1) * BOARD.flipRate;
+    // Flip: the stick tilts the board about its side axis (gently for a small push, fast for a full one). Nothing levels the board with the ground
+    // below: it keeps the angle it left the ground at, so a landing on a slope that is not the one you took off from has to be matched with the stick.
+    const push = clamp(input.pitch || 0, -1, 1), target = Math.sign(push) * (0.35 * Math.abs(push) + 0.65 * push * push) * BOARD.flipRate;
     st.pitchVel += (target - st.pitchVel) * Math.min(1, BOARD.flipResponse * dt);
     st.pitch += st.pitchVel * dt;
-    ground.normalAt(st.x, st.z, n);
-    const k = Math.min(1, BOARD.settle * dt);
-    st.upx += (n.x - st.upx) * k; st.upy += (n.y - st.upy) * k; st.upz += (n.z - st.upz) * k;
-    const ul = Math.hypot(st.upx, st.upy, st.upz) || 1; st.upx /= ul; st.upy /= ul; st.upz /= ul;
+    if (BOARD.settle > 0) {
+      ground.normalAt(st.x, st.z, n);
+      const k = Math.min(1, BOARD.settle * dt);
+      st.upx += (n.x - st.upx) * k; st.upy += (n.y - st.upy) * k; st.upz += (n.z - st.upz) * k;
+      const ul = Math.hypot(st.upx, st.upy, st.upz) || 1; st.upx /= ul; st.upy /= ul; st.upz /= ul;
+    }
     st.air += dt;
   }
 

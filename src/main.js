@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import './style.css';
 import { createCourse } from './course.js';
 import { COURSES, courseById } from './courses/index.js';
-import { createBoardState, stepBoard, speedOf, leanSteer, boardAttitude, BOARD, useFeel } from './board.js';
+import { createBoardState, stepBoard, speedOf, leanSteer, boardAttitude, perfectBalance, perfectLanding, BOARD, useFeel } from './board.js';
 import { clamp, angleDelta } from './math.js';
 import { createSky, createTerrain, createSandMaterial, makeLook, worldTime } from './world.js';
 import { createLandmarks } from './landmarks.js';
@@ -20,12 +20,13 @@ import { createSparks } from './sparks.js';
 
 // Sandboarding, first run. You stand on the summit, walk to the start gate, press A to drop in, and ride the course to the finish
 // against the clock. Thumbstick to carve, trigger to drag the tail and slow down, crouch for speed, A to hop, B back to the last
-// checkpoint, Y back to the summit. Jump onto a rail (or ride up its ramp) to grind it. On a desktop: WASD/arrows, Space, R and T, mouse to look.
+// checkpoint, Y back to the summit. Land on a rail (or ride up its ramp) to grind it, and keep your balance with the stick. On a desktop:
+// WASD/arrows, Space, R and T, mouse to look.
 
 const params = new URLSearchParams(location.search);
 useFeel(params.get('feel')); // ?feel=classic: the original direct steering, for comparing
 const BASE = import.meta.env?.BASE_URL ?? './';
-const RUN = Object.freeze({ chargeTime: 0.6, crouchDrop: 0.45, chargeDip: 0.12, checkpointEvery: 120, countdown: 3, walkSpeed: 3.2, turnSpeed: 2.2, eye: 1.65 });
+const RUN = Object.freeze({ chargeTime: 0.6, crouchDrop: 0.45, chargeDip: 0.12, checkpointEvery: 120, countdown: 3, walkSpeed: 3.2, turnSpeed: 2.2, eye: 1.65, grindRoll: 0.45, grindSway: 0.35 });
 
 // ---------------------------------------------------------------- renderer, scene, player rig
 const canvas = document.getElementById('world');
@@ -117,8 +118,9 @@ const store = {
 let mode = 'summit'; // summit | countdown | ride | finished (and fly, a dev camera)
 let board = createBoardState();
 let runTime = 0, countdown = 0, finishedFor = 0, lastCheckpoint = course.startS, result = null;
-let rigYaw = 0, headOffset = new THREE.Vector2(), standHeight = RUN.eye, rumbleClock = 0, sprayClock = 0, sparkClock = 0, grindClock = 0, lostFor = 0;
-const grindRun = { count: 0, distance: 0 }; // this run's grinds: how many rails, and how far along them
+let rigYaw = 0, headOffset = new THREE.Vector2(), standHeight = RUN.eye, rumbleClock = 0, sprayClock = 0, sparkClock = 0, grindClock = 0, lostFor = 0, sway = 0;
+let trickText = '', trickFor = 0; // the last grind's name and how much longer to show it
+const grindRun = { count: 0, distance: 0, slips: 0 }; // this run's grinds: how many, how far along the rails, and how many times you lost your balance
 let charge = 0, chargeClock = 0, crouched = false, crouchAmount = 0; // the jump's wind-up (0..1) and the right-stick crouch
 let dip = 0; // the little duck while winding up a jump, eased
 let fading = null; // { t, half, action }
@@ -154,7 +156,7 @@ function dropIn() {
   standHeight = renderer.xr.isPresenting ? Math.max(1.2, camera.position.y) : RUN.eye;
   charge = 0; crouched = false; crouchAmount = 0;
   mode = 'countdown'; countdown = RUN.countdown; runTime = 0; lastCheckpoint = course.startS; result = null; lostFor = 0;
-  grindRun.count = 0; grindRun.distance = 0;
+  grindRun.count = 0; grindRun.distance = 0; grindRun.slips = 0; trickFor = 0;
   startSign.mesh.visible = false; finishSign.mesh.visible = false;
   audio.chime(false);
 }
@@ -231,11 +233,19 @@ function handsPulse(strength, ms) { for (const s of hands.states) pulseHaptics(s
 // Sparks off the bar under the board, from near the nose and the tail (the middle is hidden under the deck): they leave with much of the
 // board's speed (they are carried along with you for a moment) and a lot of scatter, then the air takes them and they fall behind.
 function emitSparks(count, scale) {
-  const fx = -Math.sin(board.yaw), fz = -Math.cos(board.yaw), speed = speedOf(board);
+  const speed = speedOf(board);
+  // along the bar when on one (the board may be lying across it); otherwise the way the board points
+  const fx = speed > 0.5 ? board.vx / speed : -Math.sin(board.yaw), fy = speed > 0.5 ? board.vy / speed : 0, fz = speed > 0.5 ? board.vz / speed : -Math.cos(board.yaw);
   for (const along of [0.55, -0.55]) {
-    sparks.emit(board.x + fx * along, board.y + 0.03, board.z + fz * along, board.vx * 0.6, board.vy * 0.6, board.vz * 0.6,
+    sparks.emit(board.x + fx * along, board.y + 0.03 + fy * along, board.z + fz * along, board.vx * 0.6, board.vy * 0.6, board.vz * 0.6,
       { count: Math.max(1, Math.round(count / 2)), spread: 1.4 + speed * 0.03, up: 1.4 + speed * 0.03, scale });
   }
+}
+
+// A little meter for the desktop's status line: where your balance is on the bar, and which way to push.
+function balanceMeter(bal) {
+  const cells = 11, at = Math.round((clamp(bal, -1, 1) + 1) / 2 * (cells - 1));
+  return `${bal < -0.55 ? '◀◀' : '  '} ${Array.from({ length: cells }, (_, i) => (i === at ? '●' : i === (cells - 1) / 2 ? '|' : '·')).join(' ')} ${bal > 0.55 ? '▶▶' : '  '}`;
 }
 
 function statusLines() {
@@ -259,7 +269,7 @@ function statusLines() {
   ];
   return [
     { text: formatTime(runTime), size: 0.3, bold: true },
-    { text: board.grind ? `${kmh} km/h  ·  GRIND  ·  A to hop off` : `${kmh} km/h`, size: 0.2, colour: board.grind ? '#ffd27a' : '#ffd7a8' },
+    { text: board.grind ? `${kmh} km/h  ·  ${board.grind.name.toUpperCase()}  ·  ${balanceMeter(board.grind.bal)}  ·  A to hop off` : trickFor > 0 ? `${kmh} km/h  ·  ${trickText}` : `${kmh} km/h`, size: 0.2, colour: board.grind ? '#ffd27a' : '#ffd7a8' },
     { text: lostFor > 1.5 ? 'B back to the run' : 'B checkpoint · Y summit', size: 0.15, colour: lostFor > 1.5 ? '#9fe0ff' : '#d8d0c4' },
   ];
 }
@@ -309,7 +319,7 @@ function frame(time) {
       if (autopilot) {
         const ahead = Math.min(course.length, loc.s + 14), aim = course.pointAt(ahead);
         if (autoRail) { const o = autoRail.offsetAt(ahead); aim.x += Math.cos(aim.yaw) * o; aim.z -= Math.sin(aim.yaw) * o; }
-        steer = clamp(-angleDelta(board.yaw, Math.atan2(-(aim.x - board.x), -(aim.z - board.z))) * 2.5, -1, 1);
+        steer = board.grind ? perfectBalance(board.grind.bal, board.grind.balv) : clamp(-angleDelta(board.yaw, Math.atan2(-(aim.x - board.x), -(aim.z - board.z))) * 2.5, -1, 1);
       }
       // Crouch: squat for real, or click the right stick to toggle it. Either way you tuck for speed.
       if (inp.crouchToggle) crouched = !crouched;
@@ -326,7 +336,7 @@ function frame(time) {
       }
       if (inp.aReleased && charge > 0) { if (board.grounded && mode === 'ride') ollie = charge; charge = 0; }
       if (!board.grounded) charge = 0;
-      if (!frozen) stepBoard(board, { steer, brake, tuck, ollie, pitch: inp.pitch }, course, dt);
+      if (!frozen) stepBoard(board, { steer, brake, tuck, ollie, pitch: autopilot && !board.grounded ? perfectLanding(board, course) : inp.pitch }, course, dt);
       const speed = speedOf(board);
 
       for (const e of board.events) {
@@ -345,11 +355,12 @@ function frame(time) {
           const hit = Math.min(1, e.impact / 7);
           audio.clang(0.3 + 0.7 * hit); handsPulse(Math.min(1, 0.5 + hit * 0.5), 90);
           emitSparks(14 + Math.round(hit * 20), 1.6);
-          grindRun.count += 1;
+          grindRun.count += 1; trickText = e.name; trickFor = 99;
         }
         if (e.type === 'grind' && e.phase === 'end') {
           grindRun.distance += e.distance;
-          handsPulse(0.35, 50);
+          trickText = e.reason === 'slip' ? 'Slipped off' : `${e.name} ${Math.round(e.distance)} m`; trickFor = 2.5;
+          if (e.reason === 'slip') { audio.thump(0.55); audio.clang(0.5); handsPulse(0.9, 160); grindRun.slips += 1; } else handsPulse(0.35, 50);
           if (e.reason === 'jump') audio.clang(0.15);
         }
         if (e.type === 'bail') {
@@ -379,8 +390,14 @@ function frame(time) {
       // A soft rumble through both hands while the board is on the sand, a hard buzz on a rail.
       rumbleClock += dt;
       if (board.grounded && !grinding && speed > 3 && rumbleClock > 0.09) { rumbleClock = 0; handsPulse(0.04 + speed * 0.004 + carve * 0.08, 40); }
-      if (grinding && grindClock > 0.05) { grindClock = 0; handsPulse(0.2 + 0.35 * clamp(speed / 30, 0, 1), 45); }
-      audio.update(speed, board.grounded, carve, grinding);
+      // On a rail: a steady buzz in both hands, and the hand on the side you are falling toward buzzes harder the nearer the edge you get.
+      if (grinding && grindClock > 0.05) {
+        grindClock = 0;
+        const bal = board.grind.bal, risk = clamp((Math.abs(bal) - 0.4) / 0.6, 0, 1);
+        for (const h of hands.states) pulseHaptics(h, 0.1 + 0.15 * clamp(speed / 30, 0, 1) + 0.75 * (bal * (h.handedness === 'left' ? -1 : 1) > 0 ? risk : 0), 45);
+      }
+      trickFor = Math.max(0, trickFor - (board.grind ? 0 : dt));
+      audio.update(speed, board.grounded, carve, grinding, grinding ? Math.abs(board.grind.bal) : 0);
 
       if (mode === 'ride') {
         runTime += dt;
@@ -420,10 +437,16 @@ function frame(time) {
     tmpR.crossVectors(tmpF, smoothUp).normalize();
     basis.makeBasis(tmpR, smoothUp, tmpF.clone().negate());
     boardMesh.quaternion.setFromRotationMatrix(basis);
+    // On a rail the board rolls about the bar as you lose and find your balance, and your body sways off the bar the same way.
+    const balance = board.grind ? clamp(board.grind.bal, -1, 1) : 0;
+    if (board.grind && speedOf(board) > 0.5) { tmpF.set(board.vx, board.vy, board.vz).normalize(); boardMesh.quaternion.premultiply(flipQ.setFromAxisAngle(tmpF, balance * RUN.grindRoll)); }
+    sway += (balance * RUN.grindSway - sway) * Math.min(1, dt * 14);
 
     // Your view turns with the board (yaw always; in the air the flip too: the Full Send camera), pivoting at your hips so the board stays
     // under your feet. On the sand the view stays level: it never tilts with the slope.
-    rigYaw += angleDelta(rigYaw, board.yaw) * Math.min(1, dt * 10);
+    // On a rail your body faces along the bar even when the board lies across it (a boardslide), so the view does not swing sideways.
+    const viewYaw = board.grind && speedOf(board) > 0.5 ? Math.atan2(-board.vx, -board.vz) : board.yaw;
+    rigYaw += angleDelta(rigYaw, viewYaw) * Math.min(1, dt * (board.grind ? 5 : 10));
     yawQ.setFromAxisAngle(Y_AXIS, rigYaw);
     flipQ.setFromAxisAngle(X_AXIS, board.grounded ? 0 : board.pitch);
     rig.quaternion.copy(yawQ).multiply(flipQ);
@@ -433,6 +456,7 @@ function frame(time) {
     // A little duck while you wind up a jump: drops the moment you press A, springs back up the moment you pop.
     dip += ((charge > 0 ? RUN.chargeDip : 0) - dip) * Math.min(1, dt * 35);
     rig.position.y -= RUN.crouchDrop * crouchAmount + dip;
+    rig.position.x += Math.cos(rigYaw) * sway; rig.position.z -= Math.sin(rigYaw) * sway; // right of the way you face
     feet.set(0, HIPS, 0).applyQuaternion(rig.quaternion);
     boardMesh.position.set(board.x, board.y + HIPS + (board.grind ? 0.004 : 0.025), board.z).sub(feet); // 2.5 cm up: the drawn sand is flat between its points, so in a hollow it sits a touch above the real ground (on a bar it rides right on top)
   }

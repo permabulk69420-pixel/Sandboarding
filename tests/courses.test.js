@@ -81,6 +81,7 @@ for (const def of COURSES) {
       assert.ok(!r.nonFinite, `${label}: physics blew up`);
       assert.ok(r.finished, `${label}: never finished (stalls at ${r.stalls.map(x => x.s.toFixed(0))})`);
       assert.equal(r.bails.length, 0, `${label}: bailed at ${r.bails.map(b => b.s.toFixed(0))}`);
+      assert.equal(r.airs.filter(a => a.heavy).length, 0, `${label}: a rider who pitches the board to the landing still lands heavy at ${r.airs.filter(a => a.heavy).map(a => a.s.toFixed(0))}`);
       assert.equal(r.stalls.length, 0, `${label}: stalled at ${r.stalls.map(x => x.s.toFixed(0))}`);
       assert.equal(r.grinds.length, 0, `${label}: a rail caught the rider at ${r.grinds.map(g => g.s.toFixed(0))}`); // rails are off the racing line
       assert.ok(r.maxOff < 6, `${label}: strayed ${r.maxOff.toFixed(1)} m off the line`); // the simple autopilot drifts a little at speed; lanes are 9 m+ either side
@@ -95,7 +96,7 @@ for (const def of COURSES) {
     for (const [i, rail] of course.rails.entries()) assert.deepEqual(railProblems(rail, course), [], `rail ${i} (${rail.from.toFixed(0)}-${rail.to.toFixed(0)} m)`);
   });
 
-  test(`${name} a rider lined up on each rail is caught at its start and grinds it to the end`, () => {
+  test(`${name} a rider lined up on each rail is caught at its start and, balancing, grinds it to the end; one who does not balance slips off`, () => {
     for (const [i, rail] of course.rails.entries()) {
       const label = `rail ${i} (${rail.from.toFixed(0)}-${rail.to.toFixed(0)} m)`;
       const r = rideCourse(course, { from: rail.from - 45, until: rail.to + 30, speed: 12, offset: s => rail.offsetAt(s) });
@@ -107,6 +108,11 @@ for (const def of COURSES) {
       assert.equal(ends[0].reason, 'end', `${label}: left the rail by ${ends[0].reason}`);
       assert.ok(ends[0].distance > rail.length - 12, `${label}: ground ${ends[0].distance.toFixed(0)} of ${rail.length.toFixed(0)} m`);
       assert.equal(r.bails.length, 0, `${label}: bailed`);
+      // the same ride with no stick at all: the rail is caught and then lost within a few seconds, off the side, without a crash
+      const slack = rideCourse(course, { from: rail.from - 45, until: rail.to + 30, speed: 12, offset: s => rail.offsetAt(s), balance: false });
+      const lost = slack.grinds.filter(g => g.rail === i && g.phase === 'end')[0];
+      assert.ok(lost && lost.reason === 'slip' && lost.time < 4.5, `${label}: with no balance ${lost ? `${lost.reason} after ${lost.time.toFixed(1)} s` : 'never fell'}`);
+      assert.equal(slack.bails.length, 0, `${label}: a slip is not a crash`);
     }
   });
 }

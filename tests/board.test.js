@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createCourse } from '../src/course.js';
-import { createBoardState, stepBoard, speedOf, BOARD } from '../src/board.js';
+import { createBoardState, stepBoard, speedOf, BOARD, perfectBalance, perfectLanding, grindName } from '../src/board.js';
 import { angleDelta, clamp } from '../src/math.js';
 
 const course = createCourse();
@@ -125,9 +125,45 @@ test('landing a half flip (upside down) is a bail', async () => {
 });
 
 test('landing a bit over-rotated is a heavy landing that costs speed', async () => {
-  const l = await flipAndLand(Math.PI * 2 + 0.5, 1); // lands about 50 degrees past square
+  const l = await flipAndLand(Math.PI * 2 + 0.15, 1); // lands about 30 to 40 degrees past square
   assert.equal(l.type, 'land', `tilt ${(l.tilt * 57.3).toFixed(0)} deg`);
   assert.ok(l.heavy, `tilt ${(l.tilt * 57.3).toFixed(0)} deg`);
+});
+
+// A kicker: a ramp up at 25 degrees ending in a lip at z = -20, then ground falling away at 25 degrees (a landing slope).
+const kickerGround = (() => {
+  const t = Math.tan(25 * Math.PI / 180);
+  const heightAt = (x, z) => (z > -20 ? Math.max(0, -z) * t : 20 * t - (-z - 20) * t);
+  return { heightAt, normalAt: (x, z, out = {}) => { const e = 0.05, dz = (heightAt(x, z + e) - heightAt(x, z - e)) / (2 * e); const l = Math.hypot(dz, 1); out.x = 0; out.y = 1 / l; out.z = -dz / l; return out; } };
+})();
+function flyOffKicker(skilled) {
+  const st = createBoardState({ x: 0, y: kickerGround.heightAt(0, -2), z: -2, yaw: 0, speed: 0 });
+  st.vz = -16 * Math.cos(25 * Math.PI / 180); st.vy = 16 * Math.sin(25 * Math.PI / 180); // up the ramp
+  let landing = null, apexPitch = 0;
+  for (let t = 0; t < 6 && !landing; t += 1 / 120) {
+    const pitch = skilled && !st.grounded ? perfectLanding(st, kickerGround) : 0;
+    stepBoard(st, { pitch }, kickerGround, 1 / 120);
+    landing = st.events.find(e => e.type === 'land' || e.type === 'bail') || null;
+    apexPitch = Math.max(apexPitch, Math.abs(st.pitch));
+  }
+  return { landing, apexPitch };
+}
+
+test('the board does not level itself in the air: a jump off a kicker onto a landing slope has to be matched with the stick', () => {
+  const hands = flyOffKicker(false), skilled = flyOffKicker(true);
+  assert.ok(hands.landing, 'it landed');
+  assert.ok(hands.landing.type === 'bail' && hands.landing.tilt > 0.8, `hands off: ${hands.landing.type}, ${(hands.landing.tilt * 57.3).toFixed(0)} degrees off the slope`);
+  assert.equal(skilled.landing.type, 'land', `pitched to meet it: ${skilled.landing.type}`);
+  assert.ok(!skilled.landing.heavy && skilled.landing.tilt < 0.25, `landed ${(skilled.landing.tilt * 57.3).toFixed(0)} degrees off the slope`);
+  assert.ok(skilled.apexPitch > 0.5, 'by pitching it nose down a good way');
+  assert.equal(BOARD.settle, 0, 'nothing levels the board');
+});
+
+test('a small push of the stick pitches the board gently, a full push fast', () => {
+  const flat = { heightAt: () => 0, normalAt: (x, z, out) => { out.x = 0; out.y = 1; out.z = 0; return out; } };
+  const spin = push => { const st = createBoardState({ speed: 10 }); stepBoard(st, { ollie: 1 }, flat, 1 / 72); st.vy = 12; for (let t = 0; t < 0.4; t += 1 / 120) stepBoard(st, { pitch: push }, flat, 1 / 120); return st.pitch; };
+  assert.ok(spin(0.3) < spin(1) * 0.25 && spin(0.3) > 0.05, `${spin(0.3).toFixed(2)} against ${spin(1).toFixed(2)}`);
+  assert.ok(spin(-0.3) < 0 && Math.abs(spin(-0.3) + spin(0.3)) < 0.01, 'the same the other way');
 });
 
 test('stick axis snapping: near-sideways is a pure spin, near-vertical a pure flip, diagonals keep both', async () => {
@@ -156,7 +192,7 @@ test('carving: a smooth turn keeps your speed, yanking the stick at speed skids 
 });
 
 // ---------------------------------------------------------------- rails
-import { railFromPoints, buildRail } from '../src/rails.js';
+import { railFromPoints, buildRail, railYaw } from '../src/rails.js';
 const flatGround = (rails, y = 0) => ({ heightAt: () => y, normalAt: (x, z, out) => { out.x = 0; out.y = 1; out.z = 0; return out; }, rails });
 
 // A straight bar running toward -z (the way a board at yaw 0 faces), one metre between points, from z = 0. `y(d)` is its height d metres along.
@@ -164,25 +200,30 @@ function bar({ length = 60, y = () => 0.7, x = 0, entry = 0, exit = 0 } = {}) {
   const pts = []; for (let d = 0; d <= length; d += 1) pts.push([x, y(d), -d]);
   return railFromPoints(pts, { entry, exit });
 }
-// A board in the air at (x, y, z) travelling at `speed` toward -z, ready to come down on a bar.
+// A board in the air at (x, y, z) travelling at `speed` toward -z, ready to come down on a bar (whatever way it is turned: `yaw`).
 const flyer = (x, y, z, speed, rest = {}) => Object.assign(createBoardState({ x, y, z, speed }), { grounded: false }, rest);
-function run(st, ground, seconds, input = {}) {
+// Steps `st` for `seconds`, collecting its events. On a rail the rider balances perfectly with the stick unless `balance` is false.
+function run(st, ground, seconds, input = {}, balance = true) {
   const seen = [];
-  for (let t = 0; t < seconds; t += 1 / 72) { stepBoard(st, input, ground, 1 / 72); seen.push(...st.events); st.events.length = 0; }
+  for (let t = 0; t < seconds; t += 1 / 72) {
+    const steer = st.grind && balance ? perfectBalance(st.grind.bal, st.grind.balv) : (input.steer || 0);
+    stepBoard(st, { ...input, steer }, ground, 1 / 72); seen.push(...st.events); st.events.length = 0;
+  }
   return seen;
 }
+const started = events => events.find(e => e.type === 'grind' && e.phase === 'start');
+const ended = events => events.find(e => e.type === 'grind' && e.phase === 'end');
 
 test('rails: coming down on a bar catches you, carries you along it, and lets you go at the end', () => {
   const rail = bar({ length: 60 }), ground = flatGround([rail]);
   const st = flyer(0, 1.6, -5, 12);
   const events = run(st, ground, 2);
-  const start = events.find(e => e.type === 'grind' && e.phase === 'start');
-  assert.ok(start, 'never caught');
+  assert.ok(started(events), 'never caught');
   assert.ok(st.grind && st.grounded, 'should be on the bar');
   assert.ok(Math.abs(st.y - 0.7) < 0.02, `riding at ${st.y.toFixed(3)}`);
   assert.ok(speedOf(st) > 9 && speedOf(st) < 12, `speed ${speedOf(st).toFixed(2)}`);
   const later = run(st, ground, 8);
-  const end = later.find(e => e.type === 'grind' && e.phase === 'end');
+  const end = ended(later);
   assert.ok(end && end.reason === 'end', 'should run off the end');
   assert.ok(end.distance > 40 && end.time > 3, `ground ${end.distance.toFixed(1)} m in ${end.time.toFixed(1)} s`);
   assert.equal(st.grind, null);
@@ -206,7 +247,7 @@ test('rails: the bar never adds energy: speed plus height only ever falls', () =
   const st = flyer(0.4, 1.0, -4, 14);
   let e0 = null, worst = -Infinity;
   for (let t = 0; t < 6; t += 1 / 72) {
-    stepBoard(st, {}, ground, 1 / 72); st.events.length = 0;
+    stepBoard(st, { steer: st.grind ? perfectBalance(st.grind.bal, st.grind.balv) : 0 }, ground, 1 / 72); st.events.length = 0;
     if (!st.grind) continue;
     const e = energy(st); if (e0 === null) e0 = e;
     worst = Math.max(worst, e - e0); e0 = Math.min(e0, e);
@@ -228,30 +269,102 @@ test('rails: hopping off pops you away from the bar, and you can hop back on', (
   run(st, ground, 0.15);
   assert.equal(st.grind, null);
   const after = run(st, ground, 1.2);
-  assert.ok(after.some(e => e.type === 'grind' && e.phase === 'start'), 'came down on the bar again');
+  assert.ok(started(after), 'came down on the bar again');
   assert.ok(st.grind, 'riding it again');
 });
 
-test('rails: only a board close to the bar, coming down onto it, travelling along it, fast enough and the right way up is caught', () => {
+test('rails: only a board over the bar, coming down onto it, travelling along it, fast enough and the right way up is caught, and nothing pulls it in', () => {
   const rail = bar({ length: 60 }), ground = flatGround([rail]);
-  const caught = (st, seconds = 1.2) => { const events = run(st, ground, seconds); return events.some(e => e.type === 'grind' && e.phase === 'start'); };
-  assert.ok(caught(flyer(0.5, 1.5, -5, 12)), 'half a metre off to one side is fine');
+  const caught = (st, seconds = 1.2) => Boolean(started(run(st, ground, seconds)));
+  assert.ok(caught(flyer(0.5, 1.5, -5, 12)), 'half a metre off to one side, board along the bar: the bar is under the board');
+  assert.ok(!caught(flyer(0.7, 1.5, -5, 12)), 'seven tenths off with the board along the bar: the bar misses it');
+  assert.ok(caught(flyer(0.7, 1.5, -5, 12, { yaw: Math.PI / 2 })), 'but the same miss with the board across the bar is under its length');
   assert.ok(!caught(flyer(1.6, 1.5, -5, 12)), 'well to the side');
   assert.ok(!caught(flyer(0, 0.1, -5, 12, { vy: 5 }), 0.3), 'rising up through it from underneath');
   assert.ok(!caught(flyer(0, 1.5, -5, 1)), 'too slow: you step over it');
   const across = flyer(-4, 1.5, -20, 0); across.vx = 12; across.vz = 0; assert.ok(!caught(across, 0.8), 'crossing it');
+  const slanted = flyer(-1.5, 1.5, -20, 0); slanted.vx = 12 * Math.sin(0.5); slanted.vz = -12 * Math.cos(0.5); assert.ok(caught(slanted, 0.6), 'coming at it at an angle is fine');
   const wrongWay = flyer(0, 1.5, -40, 12); wrongWay.vz = 12; assert.ok(!caught(wrongWay, 0.5), 'going back up it');
   assert.ok(!caught(flyer(0, 1.5, -5, 12, { pitch: Math.PI })), 'upside down');
   assert.ok(caught(flyer(0, 1.5, -5, 12, { pitch: Math.PI * 2 + 0.3 })), 'a full flip you land is fine');
+  // Missing is just missing: the board is not drawn toward the bar.
+  const miss = flyer(0.9, 1.5, -5, 12), x0 = miss.x;
+  assert.ok(!started(run(miss, ground, 0.5)));
+  assert.ok(Math.abs(miss.x - x0) < 1e-9 && !miss.grind, 'it carries straight on');
 });
 
-test('rails: the board swings round to lie along the bar', () => {
+test('rails: the board stays at the angle you landed it, the bar does not turn it', () => {
   const rail = bar({ length: 80 }), ground = flatGround([rail]);
-  const st = flyer(0, 1.4, -5, 12, { yaw: 0.6 });
-  run(st, ground, 0.5);
-  assert.ok(st.grind);
-  run(st, ground, 0.5);
-  assert.ok(Math.abs(angleDelta(st.yaw, 0)) < 0.01, `yaw ${st.yaw.toFixed(3)}`);
+  for (const yaw of [0.6, -0.9, Math.PI / 2, Math.PI]) {
+    const st = flyer(0, 1.4, -5, 12, { yaw });
+    run(st, ground, 1.2);
+    assert.ok(st.grind, `caught at yaw ${yaw}`);
+    assert.ok(Math.abs(angleDelta(st.yaw, yaw)) < 1e-6, `landed at ${yaw}, now ${st.yaw.toFixed(3)}`);
+    assert.ok(Math.abs(angleDelta(railYaw(0, -1) + st.grind.rel, st.yaw)) < 1e-6);
+  }
+  assert.equal(grindName(0), '50-50'); assert.equal(grindName(Math.PI), '50-50');
+  assert.equal(grindName(Math.PI / 2), 'Boardslide'); assert.equal(grindName(-Math.PI / 2), 'Boardslide');
+  assert.equal(grindName(0.9), 'Slide');
+});
+
+test('rails: a boardslide: land crosswise, slide the bar sideways on, pop off and come down straight', () => {
+  const rail = bar({ length: 22 }), ground = flatGround([rail]);
+  const st = flyer(0.2, 1.5, -4, 12, { yaw: Math.PI / 2 });
+  const events = run(st, ground, 1.3);
+  const start = started(events);
+  assert.ok(start && start.name === 'Boardslide', JSON.stringify(start));
+  assert.ok(st.grind && speedOf(st) > 10, `sliding at ${speedOf(st).toFixed(1)} m/s`);
+  assert.ok(Math.abs(angleDelta(st.yaw, Math.PI / 2)) < 1e-6, 'still across the bar');
+  // pop off before the end of the bar: the board eases round to the way you are going, so you fly clear of it and come down square on the sand
+  stepBoard(st, { ollie: 0.9 }, ground, 1 / 72);
+  const off = [...st.events]; st.events.length = 0;
+  off.push(...run(st, ground, 2));
+  assert.ok(ended(off)?.reason === 'jump');
+  assert.ok(off.some(e => e.type === 'land') && !off.some(e => e.type === 'bail'), 'landed, no crash');
+  assert.ok(Math.min(Math.abs(angleDelta(st.yaw, 0)), Math.abs(angleDelta(st.yaw, Math.PI))) < 0.15, `pointing the way it travels again: ${st.yaw.toFixed(2)}`);
+  assert.ok(speedOf(st) > 8, `kept its speed: ${speedOf(st).toFixed(1)}`);
+});
+
+test('rails: balance: left alone you roll off the side, a push of the stick rolls the board the way you push, and landing off to one side starts you off balance that way', () => {
+  const rail = bar({ length: 120 });
+  const ground = flatGround([rail]);
+  // no stick: you slip off in a second or two, to the side you were leaning, losing some speed, and do not crash
+  const lean = flyer(0.3, 1.2, -4, 12), v0 = 12;
+  const events = run(lean, ground, 4, {}, false);
+  const end = ended(events);
+  assert.ok(end && end.reason === 'slip' && end.time > 0.4 && end.time < 3.5, `${JSON.stringify(end)}`);
+  assert.ok(end.bal > 0.99 && lean.x > 0.3, `leaning right (${end.bal.toFixed(2)}), so off to the right: x ${lean.x.toFixed(2)}`);
+  assert.ok(!events.some(e => e.type === 'bail'), 'a slip is a stumble, not a crash');
+  assert.ok(speedOf(lean) < v0 * 0.95 && speedOf(lean) > 4, `speed ${speedOf(lean).toFixed(1)}`);
+  assert.ok(!events.filter(e => e.type === 'grind' && e.phase === 'start').slice(1).length, 'and it does not catch you straight back');
+  const left = flyer(-0.3, 1.2, -4, 12);
+  const leftEnd = ended(run(left, ground, 4, {}, false));
+  assert.ok(leftEnd.bal < -0.99 && left.x < -0.3, 'the other side the other way');
+  // landing off to one side leans you that way
+  const a = flyer(0.4, 1.0, -4, 12), b = flyer(-0.4, 1.0, -4, 12);
+  run(a, ground, 0.25); run(b, ground, 0.25);
+  assert.ok(a.grind.bal > 0.1 && b.grind.bal < -0.1, `${a.grind.bal.toFixed(2)} ${b.grind.bal.toFixed(2)}`);
+  // pushing the stick right rolls the board right, left rolls it left
+  const p = flyer(0, 1.0, -4, 12), q = flyer(0, 1.0, -4, 12), c = flyer(0, 1.0, -4, 12);
+  for (const st of [p, q, c]) run(st, ground, 0.25);
+  run(p, ground, 0.3, { steer: 1 }, false); run(q, ground, 0.3, { steer: -1 }, false); run(c, ground, 0.3, {}, false);
+  assert.ok(p.grind.bal > c.grind.bal + 0.12, `pushed right: ${p.grind.bal.toFixed(2)} against ${c.grind.bal.toFixed(2)} untouched`);
+  assert.ok(q.grind.bal < c.grind.bal - 0.12, `pushed left: ${q.grind.bal.toFixed(2)} against ${c.grind.bal.toFixed(2)} untouched`);
+  // and a rider who reads the roll and pushes against it holds the bar to the end
+  const good = flyer(0.4, 1.2, -4, 12);
+  const goodEvents = run(good, ground, 14);
+  assert.ok(ended(goodEvents)?.reason === 'end', 'a steady hand rides it out');
+});
+
+test('rails: slipping works at any angle, and a bar that is too flat for your speed lets you slide off it', () => {
+  const rail = bar({ length: 80, y: d => 0.7 + d * 0.09 }), ground = flatGround([rail], 0); // climbing: it stops you
+  const st = flyer(0, 1.2, -4, 5);
+  const end = ended(run(st, ground, 8));
+  assert.ok(end && end.reason === 'slip', JSON.stringify(end));
+  const across = flyer(0.2, 1.2, -4, 12, { yaw: -Math.PI / 2 }), flat = flatGround([bar({ length: 100, y: d => 0.7 - d * 0.04 })]);
+  flat.rails[0] = bar({ length: 100, y: d => 0.7 - d * 0.04 });
+  const e2 = ended(run(across, flat, 5, {}, false));
+  assert.ok(e2 && e2.reason === 'slip' && e2.name === 'Boardslide', JSON.stringify(e2));
 });
 
 test('rails: ride straight up the ramp at the start without a jump, and ride off the end without one too', () => {
@@ -260,12 +373,15 @@ test('rails: ride straight up the ramp at the start without a jump, and ride off
   const rail = railFromPoints(pts, { entry: 5, exit: 5 }), ground = flatGround([rail]);
   const st = createBoardState({ x: 0, y: 0, z: 20, yaw: 0, speed: 10 });
   const events = run(st, ground, 12);
-  const start = events.find(e => e.type === 'grind' && e.phase === 'start'), end = events.find(e => e.type === 'grind' && e.phase === 'end');
+  const start = started(events), end = ended(events);
   assert.ok(start && end && end.reason === 'end', 'caught at the start and let go at the end');
   assert.ok(end.distance > 45, `ground ${end.distance.toFixed(1)} m`);
   assert.ok(!events.some(e => e.type === 'launch'), 'no jump');
   assert.ok(st.grounded && !st.grind, 'back on the sand');
-  // a board passing a metre and a half to the side is not caught
+  assert.ok(Math.abs(st.yaw) < 0.01, 'and still pointing straight on');
+  // anywhere on the ramp's stripes catches you; a board passing a metre and a half to the side is not caught
+  const edge = createBoardState({ x: 0.7, y: 0, z: 20, yaw: 0, speed: 10 });
+  assert.ok(started(run(edge, ground, 12)), 'on the edge of the stripes');
   const wide = createBoardState({ x: 1.5, y: 0, z: 20, yaw: 0, speed: 10 });
   assert.ok(!run(wide, ground, 12).some(e => e.type === 'grind'));
 });

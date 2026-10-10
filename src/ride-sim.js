@@ -2,13 +2,15 @@
 // and reports how it went. Used by the tests and by `npm run ride-check`. Not used by the game itself.
 //
 // Options: `tuck`, `brake` (held throughout), `limit` (seconds before giving up), `dt`, and to ride part of a run on a line of its own
-// (how the tests check a rail): `from` and `until` (metres along the run), `speed` to start at, and `offset` (metres right of the centre
-// line, or a function of the distance along it) to ride at.
+// (how the tests check a rail): `from` and `until` (metres along the run), `speed` to start at, `trace(st, loc)` called every step, and `offset` (metres right of the centre
+// line, or a function of the distance along it) to ride at. On a rail the rider balances perfectly with the stick (`balance: false` gives it
+// no stick at all, to see how long a rail holds someone who does not). In the air the rider pitches the board to meet the ground it is going to
+// land on (`skill: false` keeps its hands off, to see how a landing goes for someone who does not).
 
-import { createBoardState, stepBoard, speedOf } from './board.js';
+import { createBoardState, stepBoard, speedOf, perfectBalance, perfectLanding } from './board.js';
 import { angleDelta, clamp } from './math.js';
 
-export function rideCourse(course, { tuck = 0, brake = 0, limit = 600, dt = 1 / 72, from = course.startS, until = course.finishS, speed = 2, offset = 0 } = {}) {
+export function rideCourse(course, { tuck = 0, brake = 0, limit = 600, dt = 1 / 72, from = course.startS, until = course.finishS, speed = 2, offset = 0, balance = true, skill = true, trace = null } = {}) {
   const side = typeof offset === 'function' ? offset : () => offset;
   const lineAt = s => { // a point on the line being ridden: the centre line, or beside it
     const c = course.pointAt(s), o = side(s);
@@ -35,9 +37,13 @@ export function rideCourse(course, { tuck = 0, brake = 0, limit = 600, dt = 1 / 
     if (loc.s >= until) { out.finished = true; break; }
     const aim = lineAt(Math.min(course.length, loc.s + 14));
     const want = Math.atan2(-(aim.x - st.x), -(aim.z - st.z));
-    stepBoard(st, { steer: clamp(-angleDelta(st.yaw, want) * 2.5, -1, 1), tuck, brake }, course, dt);
+    const g = st.grind;
+    const steer = g ? (balance ? perfectBalance(g.bal, g.balv) : 0) : clamp(-angleDelta(st.yaw, want) * 2.5, -1, 1);
+    const pitch = skill && !st.grounded && !g ? perfectLanding(st, course) : 0;
+    stepBoard(st, { steer, tuck, brake, pitch }, course, dt);
+    if (trace) trace(st, loc);
     for (const e of st.events) {
-      if (e.type === 'land' && e.air > 0.3) out.airs.push({ s: loc.s, air: e.air, impact: e.impact, heavy: Boolean(e.heavy) });
+      if (e.type === 'land' && e.air > 0.3) out.airs.push({ s: loc.s, air: e.air, impact: e.impact, heavy: Boolean(e.heavy), tilt: e.tilt });
       if (e.type === 'bail') out.bails.push({ s: loc.s, tilt: e.tilt });
       if (e.type === 'grind') out.grinds.push({ s: loc.s, phase: e.phase, reason: e.reason, time: e.time, distance: e.distance, rail: e.rail });
     }
