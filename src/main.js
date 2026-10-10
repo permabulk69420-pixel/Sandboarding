@@ -18,7 +18,7 @@ import { pulseHaptics } from './haptics.js';
 
 const params = new URLSearchParams(location.search);
 const BASE = import.meta.env?.BASE_URL ?? './';
-const RUN = Object.freeze({ chargeTime: 0.6, crouchDrop: 0.45, name: 'Ridgeline', checkpointEvery: 120, countdown: 3, walkSpeed: 3.2, turnSpeed: 2.2, eye: 1.65 });
+const RUN = Object.freeze({ chargeTime: 0.6, crouchDrop: 0.45, chargeDip: 0.12, name: 'Ridgeline', checkpointEvery: 120, countdown: 3, walkSpeed: 3.2, turnSpeed: 2.2, eye: 1.65 });
 
 // ---------------------------------------------------------------- renderer, scene, player rig
 const canvas = document.getElementById('world');
@@ -88,6 +88,7 @@ let board = createBoardState();
 let runTime = 0, countdown = 0, finishedFor = 0, lastCheckpoint = course.startS, result = null;
 let rigYaw = 0, headOffset = new THREE.Vector2(), standHeight = RUN.eye, rumbleClock = 0, sprayClock = 0, lostFor = 0;
 let charge = 0, chargeClock = 0, crouched = false, crouchAmount = 0; // the jump's wind-up (0..1) and the right-stick crouch
+let dip = 0; // the little duck while winding up a jump, eased
 let fading = null; // { t, half, action }
 const autopilot = params.has('auto');
 
@@ -272,7 +273,12 @@ function frame(time) {
         if (e.type === 'bail') {
           // A crash: thump, sand everywhere, then a quick fade and you're back on your feet on the run, a little slower.
           audio.thump(1); puffs.impact(board.x, board.z, { size: 1.2, strength: 1 }); handsPulse(1, 200);
-          if (mode === 'ride') fadeThen(() => { boardAt(course.locate(board.x, board.z).s, 5); lostFor = 0; });
+          if (mode === 'ride') fadeThen(() => {
+            let at = course.locate(board.x, board.z).s;
+            const gap = course.features.find(f => f.type === 'gap' && at > f.from - 4 && at < f.to);
+            if (gap) at = gap.to + 6; // never back on your feet in the hole: just past it
+            boardAt(at, 5); lostFor = 0;
+          });
         }
       }
       board.events.length = 0;
@@ -338,7 +344,9 @@ function frame(time) {
     // Feet: the hips (above the board) minus your body, turned with you. Your real head's spot in the play space stays over the board.
     lift.set(headOffset.x, HIPS, headOffset.y).applyQuaternion(rig.quaternion);
     rig.position.set(board.x, board.y + HIPS + 0.04, board.z).sub(lift);
-    rig.position.y -= RUN.crouchDrop * crouchAmount;
+    // A little duck while you wind up a jump: eases down as it charges, springs back up quickly when you pop.
+    dip += (RUN.chargeDip * charge - dip) * Math.min(1, dt * (charge > 0 ? 10 : 18));
+    rig.position.y -= RUN.crouchDrop * crouchAmount + dip;
     feet.set(0, HIPS, 0).applyQuaternion(rig.quaternion);
     boardMesh.position.set(board.x, board.y + HIPS + 0.005, board.z).sub(feet);
   }

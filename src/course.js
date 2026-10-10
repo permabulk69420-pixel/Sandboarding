@@ -14,36 +14,59 @@ import { clamp, mix, smooth, fbm, noise } from './math.js';
 // Hand-placed centre line, metres. The run heads roughly north (-z) from the summit.
 const CONTROL = [
   [0, 40], [0, 0], [0, -50], [12, -120], [42, -190], [46, -260], [18, -320], [-28, -380], [-46, -450],
-  [-24, -515], [18, -570], [44, -640], [36, -710], [8, -770], [0, -830], [0, -880], [0, -930],
+  [-24, -515], [18, -570], [44, -640], [36, -710], [8, -770],
+  [-30, -850], [-75, -930], [-95, -1030], [-70, -1130], [-15, -1210], [45, -1290], [85, -1380], [95, -1480],
+  [80, -1580], [35, -1670], [-25, -1750], [-65, -1840], [-60, -1930], [-20, -2010], [25, -2090], [45, -2190],
+  [35, -2290], [10, -2390], [0, -2480], [0, -2560], [0, -2640], [0, -2700],
 ];
 
+// Everything below is laid out in metres along the centre line as it measures now (2948 m). If the line is reshaped, it all stretches to fit.
+const DESIGN_LENGTH = 2948;
+
 // Elevation along the centre line (arc length s -> height). Interpolated with a monotone cubic so slopes never overshoot.
-// Summit pad, a cruisy first pitch, a steep pitch, rollers, the first kicker, a gully, a bigger kicker, a long fast finish, then a runout
-// that climbs gently to bring you to a stop.
+// The summit, the original Ridgeline run (cruisy pitch, steep pitch, rollers, kicker, gully, kicker), then the open bowl, a steep chute into
+// the first big jump, S-bends, the canyon, the gap jump, and a long wide fast finish with a runout that climbs to stop you.
 const PROFILE = [
-  [0, 160], [48, 159], [70, 156], [150, 138], [240, 112], [320, 84], [360, 78], [440, 66], [500, 52],
-  [580, 38], [660, 22], [740, 9], [800, 2], [850, 0], [890, 1.5], [940, 6],
+  [0, 460], [53, 459], [77, 456], [165, 438], [264, 412], [352, 384], [396, 378], [484, 366], [551, 352], [639, 338], [727, 322], [815, 309],
+  [874, 300], [1000, 286], [1120, 272], [1250, 256], [1330, 240], [1420, 214], [1452, 207], [1500, 186], [1560, 168], [1640, 156],
+  [1760, 140], [1850, 124], [1960, 108], [2050, 94], [2105, 88], [2178, 68], [2230, 52], [2280, 42], [2400, 28], [2560, 15], [2700, 4.5],
+  [2780, 1], [2830, 0], [2890, 2], [2948, 7],
 ];
 
 export const COURSE = Object.freeze({
-  startS: 46, // the start gate
-  finishS: 830, // the finish gate
+  startS: 50, // the start gate
+  finishS: 2720, // the finish gate (the slope after it is too gentle to keep you moving: the runout)
   checkpointEvery: 120,
-  laneHalfWidth: 15,
   wallSteep: 0.05, // how quickly the walls curve up beyond the lane
   flank: 0.55, // the channel's walls keep climbing at this slope (must stay above the run's own slope, so stretches stay local)
   fall: 0.62, // the mountain's sides fall away at this slope beyond the ridge
   plain: -16, // the desert floor round the mountain (the finish is at 0)
 });
 
-// How far the ridges stand above the lane, by arc length: low round the summit, tall along the gully.
-const RIDGE = [[0, 2.5], [60, 5], [130, 9], [540, 10], [560, 17], [620, 17], [640, 10], [860, 8], [940, 9]];
+// How far the ridges stand above the lane: low round the summit and the open bowl, tall along the gully and the canyon.
+const RIDGE = [[0, 2.5], [66, 5], [143, 9], [595, 10], [617, 17], [683, 17], [705, 10], [860, 9], [920, 5], [1240, 5], [1290, 10],
+  [1860, 12], [1880, 22], [2040, 22], [2080, 11], [2400, 7], [2948, 9]];
 
-// Features along the run, by arc length.
-const WIDTH = [[0, 26], [40, 22], [70, 15], [520, 15], [545, 9], [600, 9], [625, 15], [830, 18], [870, 30], [940, 30]];
-const ROLLERS = [{ from: 320, to: 432, wavelength: 28, height: 1.3 }, { from: 676, to: 740, wavelength: 22, height: 0.9 }];
+// The lane's half width: the gully at ~630 m, the open bowl (100 m across), the canyon, room round the gap jump, a wide finish.
+const WIDTH = [[0, 26], [44, 22], [77, 15], [572, 15], [600, 9], [661, 9], [688, 15], [800, 15], [860, 16], [920, 50], [1240, 50],
+  [1290, 17], [1400, 14], [1470, 16], [1560, 20], [1840, 18], [1870, 10], [2040, 10], [2080, 16], [2140, 24], [2300, 24], [2420, 34],
+  [2790, 34], [2850, 40], [2948, 40]];
+const ROLLERS = [
+  { from: 352, to: 476, wavelength: 28, height: 1.3 }, { from: 744, to: 815, wavelength: 22, height: 0.9 },
+  { from: 1130, to: 1240, wavelength: 30, height: 1.8 }, // hummocks in the bowl
+  { from: 2420, to: 2560, wavelength: 26, height: 1.2 },
+];
 // A kicker's ramp curves up (shape exponent) so its lip points skyward; beyond the lip a landing slope eases back down to the run.
-const KICKERS = [{ at: 470, length: 12, height: 2.3, drop: 10, lane: 6, curve: 2.2 }, { at: 650, length: 14, height: 2.6, drop: 12, lane: 7, curve: 2.2 }];
+// `lane` is the half width of the kicker; the lane goes on past either side of it if you'd rather not jump.
+const KICKERS = [
+  { at: 517, length: 12, height: 2.3, drop: 10, lane: 6, curve: 2.2 },
+  { at: 716, length: 14, height: 2.6, drop: 12, lane: 7, curve: 2.2 },
+  { at: 1452, length: 24, height: 4.6, drop: 40, lane: 9, curve: 2.3 }, // big jump one: long steep landing, enough air to flip
+  { at: 2182, length: 20, height: 3.8, drop: 6, lane: 10, curve: 2.6 }, // the gap jump's takeoff
+];
+// A trench across the middle of the lane: the gap you jump. Steep on the near side, a long gentle ramp out on the far side (the run keeps
+// falling away under it), so coming up short costs you speed but never traps you.
+const GAPS = [{ from: 2186, to: 2216, depth: 4.5, bottom: 0.3, lane: 10 }];
 
 // ---------------------------------------------------------------- the centre line
 function catmull(p0, p1, p2, p3, t) {
@@ -107,13 +130,13 @@ export function createCourse() {
   const pts = sampleCentreLine(1);
   const n = pts.length;
   const length = n - 1;
-  // Everything along the run was laid out for a 940 m line; stretch it to the line's real length.
-  const k = length / 940;
+  const k = length / DESIGN_LENGTH;
   const elevation = monotone(PROFILE.map(([s, y]) => [s * k, y]));
   const halfWidth = linearKeys(WIDTH.map(([s, w]) => [s * k, w]));
   const ridgeAt = linearKeys(RIDGE.map(([s, r]) => [s * k, r]));
   const rollers = ROLLERS.map(r => ({ ...r, from: r.from * k, to: r.to * k }));
   const kickers = KICKERS.map(kk => ({ ...kk, at: kk.at * k }));
+  const gaps = GAPS.map(gp => ({ ...gp, from: gp.from * k, to: gp.to * k }));
 
   // Per-point tangent and smoothed signed curvature (positive = turning left).
   const tx = new Float64Array(n), tz = new Float64Array(n), rawK = new Float64Array(n);
@@ -142,6 +165,11 @@ export function createCourse() {
       if (i < start || i > kk.at + kk.drop) continue;
       K[i] += kk.height * (i <= kk.at ? ((i - start) / kk.length) ** kk.curve : 1 - smooth(0, 1, (i - kk.at) / kk.drop));
       KL[i] = kk.lane;
+    }
+    for (const gp of gaps) if (i >= gp.from && i <= gp.to) {
+      const u = (i - gp.from) / (gp.to - gp.from);
+      K[i] -= gp.depth * (u < gp.bottom ? smooth(0, 1, u / gp.bottom) : 1 - smooth(0, 1, (u - gp.bottom) / (1 - gp.bottom)));
+      KL[i] = Math.max(KL[i], gp.lane);
     }
   }
   // The mountain: every 4th centre-line point carries the height of the ridge tops and the lane's half width there, blended smoothly
@@ -181,7 +209,11 @@ export function createCourse() {
     const over = along < 0 ? -along : along > len ? along - len : 0;
     const j = i + 1;
     const w = mix(W[i], W[j], t), ad = Math.abs(cross), inLane = Math.min(ad, w);
-    let h = mix(E[i], E[j], t) + 0.010 * inLane * inLane + mix(B[i], B[j], t) * clamp(cross, -w, w);
+    // A shallow dish across the lane so you drift back to the middle (about 2 m deep at the edge of a normal lane, never more than 4.5 m
+    // across the wide bowl), and banked turns (the bank stops growing 15 m out, so wide sections don't tip over).
+    const dish = w <= 15 ? 0.010 : mix(2.25, 4.5, smooth(15, 50, w)) / (w * w);
+    const bankReach = Math.min(w, 15);
+    let h = mix(E[i], E[j], t) + dish * inLane * inLane + mix(B[i], B[j], t) * clamp(cross, -bankReach, bankReach);
     const roll = mix(R[i], R[j], t), kick = mix(K[i], K[j], t);
     if (roll !== 0) h += roll * (1 - smooth(w - 5, w, ad));
     if (kick !== 0) { const lane = Math.max(KL[i], KL[j]); h += kick * (1 - smooth(lane, lane + 3, ad)); }
@@ -288,6 +320,8 @@ export function createCourse() {
   return {
     length, points: pts, heightAt, normalAt, locate, pointAt, elevation, halfWidth,
     startS: COURSE.startS * k, finishS: COURSE.finishS * k,
-    kickers: kickers.map(kk => kk.at), bounds: { minX: minX - BOUND, maxX: maxX + BOUND, minZ: minZ - BOUND, maxZ: maxZ + BOUND },
+    kickers: kickers.map(kk => kk.at),
+    // Stretches where the lane is meant to be steep (kicker ramps and landings, the gap), for tests and anything that wants to know.
+    features: [...kickers.map(kk => ({ type: 'kicker', from: kk.at - kk.length, to: kk.at + kk.drop })), ...gaps.map(gp => ({ type: 'gap', from: gp.from, to: gp.to }))], bounds: { minX: minX - BOUND, maxX: maxX + BOUND, minZ: minZ - BOUND, maxZ: maxZ + BOUND },
   };
 }

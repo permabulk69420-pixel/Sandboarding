@@ -6,7 +6,7 @@ import { angleDelta, clamp } from '../src/math.js';
 
 const course = createCourse();
 
-function ride({ tuck = 0, brake = 0, limit = 200 } = {}) {
+function ride({ tuck = 0, brake = 0, limit = 400 } = {}) {
   const p = course.pointAt(course.startS);
   const st = createBoardState({ x: p.x, y: p.y, z: p.z, yaw: p.yaw, speed: 2 });
   const out = { time: 0, maxSpeed: 0, airs: [], bails: 0, maxOff: 0, finished: false };
@@ -26,10 +26,10 @@ function ride({ tuck = 0, brake = 0, limit = 200 } = {}) {
   return out;
 }
 
-test('a clean run reaches the finish in about a minute, with air off both kickers', () => {
+test('a clean run reaches the finish in about four minutes, with air off every kicker', () => {
   const r = ride();
   assert.ok(r.finished, 'finished');
-  assert.ok(r.time > 45 && r.time < 95, `time ${r.time}`);
+  assert.ok(r.time > 150 && r.time < 300, `time ${r.time}`);
   for (const k of course.kickers) assert.ok(r.airs.some(s => s > k && s < k + 40), `no air off the kicker at ${k.toFixed(0)} (landed at ${r.airs.map(Math.round)})`);
   assert.equal(r.bails, 0);
   assert.ok(r.maxOff < 4, `strayed ${r.maxOff}`);

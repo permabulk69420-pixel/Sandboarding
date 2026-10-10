@@ -192,12 +192,12 @@ export function createSandMaterial({ detail = 1, offset = 0 } = {}) {
   return material;
 }
 
-function gridGeometry(grid) {
+function tileGeometry(tile) {
   const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.BufferAttribute(grid.positions, 3));
-  geometry.setIndex(new THREE.BufferAttribute(grid.indices, 1));
-  geometry.computeVertexNormals();
-  geometry.computeBoundingSphere();
+  geometry.setAttribute('position', new THREE.BufferAttribute(tile.positions, 3));
+  geometry.setAttribute('normal', new THREE.BufferAttribute(tile.normals, 3));
+  geometry.setIndex(new THREE.BufferAttribute(tile.indices, 1));
+  geometry.computeBoundingSphere(); // per tile, so tiles out of view are skipped
   return geometry;
 }
 
@@ -214,19 +214,21 @@ export async function createTerrain(course, { url, sandUrl, onStatus = () => {} 
   let grids;
   try { grids = buildTerrainGrids(course, baked); } catch (error) { console.warn(error); grids = buildTerrainGrids(course); }
   const group = new THREE.Group(); group.name = 'Terrain';
-  const near = new THREE.Mesh(gridGeometry(grids.near), createSandMaterial({ detail: 1 }));
+  const nearMaterial = createSandMaterial({ detail: 1 });
+  const near = new THREE.Group(); near.name = 'Terrain near';
+  for (const tile of grids.near.tiles) near.add(new THREE.Mesh(tileGeometry(tile), nearMaterial));
   if (sandUrl) {
     new THREE.TextureLoader().load(sandUrl, texture => {
       texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
       texture.colorSpace = THREE.NoColorSpace; // data, not colour
       texture.anisotropy = 4;
-      near.material.uniforms.uSandTex.value = texture;
-      near.material.uniforms.uTexOn.value = 1;
+      nearMaterial.uniforms.uSandTex.value = texture;
+      nearMaterial.uniforms.uTexOn.value = 1;
     });
   }
-  near.name = 'Terrain near';
-  const far = new THREE.Mesh(gridGeometry(grids.far), createSandMaterial({ detail: 0, offset: 2 }));
-  far.name = 'Terrain far';
+  const farMaterial = createSandMaterial({ detail: 0, offset: 2 });
+  const far = new THREE.Group(); far.name = 'Terrain far';
+  for (const tile of grids.far.tiles) far.add(new THREE.Mesh(tileGeometry(tile), farMaterial));
   group.add(far, near);
   return group;
 }
