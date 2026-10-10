@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import './style.css';
 import { createCourse } from './course.js';
 import { COURSES, courseById } from './courses/index.js';
-import { createBoardState, stepBoard, speedOf, leanSteer, boardAttitude, BOARD } from './board.js';
+import { createBoardState, stepBoard, speedOf, leanSteer, boardAttitude, BOARD, useFeel } from './board.js';
 import { clamp, angleDelta } from './math.js';
 import { createSky, createTerrain, LOOK, worldTime } from './world.js';
 import { createWindSand, WIND_SAND } from './wind-sand.js';
@@ -19,6 +19,7 @@ import { pulseHaptics } from './haptics.js';
 // checkpoint, Y back to the summit. On a desktop: WASD/arrows, Space, R and T, mouse to look.
 
 const params = new URLSearchParams(location.search);
+useFeel(params.get('feel')); // ?feel=classic: the original direct steering, for comparing
 const BASE = import.meta.env?.BASE_URL ?? './';
 const RUN = Object.freeze({ chargeTime: 0.6, crouchDrop: 0.45, chargeDip: 0.12, checkpointEvery: 120, countdown: 3, walkSpeed: 3.2, turnSpeed: 2.2, eye: 1.65 });
 

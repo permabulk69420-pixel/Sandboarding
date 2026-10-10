@@ -3,7 +3,13 @@
 // On the ground, gravity pulls you down the slope, sand friction and air drag hold you back, and the board's edge grips sideways with a
 // limited force (like real friction). While the board points roughly where you're going, that grip carves: it turns your speed toward
 // the nose. When the board is well across your travel, or you brake, it skids and scrubs speed off instead. The edge can only redirect or
-// remove speed, never add it, so the only thing that ever speeds you up is going downhill. Steering turns the nose, faster at low speed.
+// remove speed, never add it, so the only thing that ever speeds you up is going downhill.
+//
+// Steering is an edge, not a wheel: the stick sets how far the board is tipped on its edge, and it takes a moment to roll over (and longer
+// to roll from one edge right across to the other, through a flat moment where it grips less). The tip turns the nose. Ask for more turn
+// than the sand can hold at your speed and the nose comes round faster than your travel: the board goes crosswise, skids and scrubs speed.
+// So smooth, early turns carve and keep your speed; yanking the stick at full speed is a skid (which is also how you check your speed).
+// The old, direct steering is still here as the "classic" feel (useFeel('classic'), or ?feel=classic in the game).
 // If the ground falls away faster than you do (a kicker's lip, the crest of a roller at speed) you are in the air until you come down.
 // Everything is per second and lives in BOARD so it is easy to tune.
 
@@ -19,9 +25,15 @@ export const BOARD = Object.freeze({
   carveFrom: 0.55, // cosine of the angle between board and travel: below this the board skids...
   carveTo: 0.85, // ...above this it carves cleanly (blended between)
   turnSlow: 2.4, // radians per second of steering at walking pace
-  turnFast: 1.15, // ... and at speed
+  turnFast: 0.95, // ... and at speed
   turnFastAt: 24, // metres per second where steering is at its slowest
-  steerResponse: 9, // per second: how quickly the board follows the stick
+  steerResponse: 9, // per second: how quickly the stick's reading is smoothed (spins in the air use it directly)
+  edgeRate: 4.2, // per second: how fast the board rolls onto its edge (full tip in about a quarter second, edge to edge in half)
+  flatGrip: 0.5, // share of the edge's grip while the board is flat, rolling from one edge to the other...
+  edgeFull: 0.35, // ...back to full grip by this much tip
+  skidScrub: 0.8, // extra friction (times your weight) while the board is skidding: a hard skid is a real speed check
+  skidFrom: 0.985, // cosine of the angle between board and travel where the skid starts to scrub (about 10 degrees)...
+  skidTo: 0.87, // ...and where it scrubs fully (about 30 degrees)
   brakeFriction: 0.55, // extra friction at full brake (dragging the tail)
   brakeGripLoss: 0.5, // the edge holds less (you skid) while braking
   ollie: 4.3, // metres per second off the ground for a normal pop
@@ -40,11 +52,16 @@ export const BOARD = Object.freeze({
   heavyKeep: 0.72, // share of your speed a heavy landing keeps
 });
 
+// The original feel: the stick turns the nose directly, grips fully at once, and a skid costs only the speed it turns away.
+export const CLASSIC = Object.freeze({ ...BOARD, turnFast: 1.15, edgeRate: 0, flatGrip: 1, skidScrub: 0 });
+let FEEL = BOARD;
+export function useFeel(name) { FEEL = name === 'classic' ? CLASSIC : BOARD; return FEEL; }
+
 // state: { x, y, z, vx, vy, vz, yaw, steer, grounded, air, nx, ny, nz }
 export function createBoardState({ x = 0, y = 0, z = 0, yaw = 0, speed = 0 } = {}) {
   const fx = -Math.sin(yaw), fz = -Math.cos(yaw);
   return {
-    x, y, z, vx: fx * speed, vy: 0, vz: fz * speed, yaw, steer: 0, grounded: true, air: 0, nx: 0, ny: 1, nz: 0, events: [],
+    x, y, z, vx: fx * speed, vy: 0, vz: fz * speed, yaw, steer: 0, edge: 0, grounded: true, air: 0, nx: 0, ny: 1, nz: 0, events: [],
     pitch: 0, pitchVel: 0, upx: 0, upy: 1, upz: 0, yaw0: yaw, // in the air: tilt from the ground's angle below, and the yaw you left at
   };
 }
@@ -96,9 +113,12 @@ export function boardAttitude(st, out = { f: { x: 0, y: 0, z: -1 }, u: { x: 0, y
 const att = { f: { x: 0, y: 0, z: -1 }, u: { x: 0, y: 1, z: 0 } };
 
 function substep(st, input, ground, dt, ollie) {
+  const B = FEEL;
   const g = BOARD.gravity;
   const steerTarget = clamp(input.steer || 0, -1, 1);
   st.steer += (steerTarget - st.steer) * Math.min(1, BOARD.steerResponse * dt);
+  // The edge rolls toward where the stick asks, at a limited rate.
+  if (B.edgeRate) st.edge += clamp(steerTarget - st.edge, -B.edgeRate * dt, B.edgeRate * dt); else st.edge = st.steer;
   const brake = clamp(input.brake || 0, 0, 1), tuck = clamp(input.tuck || 0, 0, 1);
   let speed = speedOf(st);
 
@@ -106,8 +126,8 @@ function substep(st, input, ground, dt, ollie) {
     ground.normalAt(st.x, st.z, n);
     st.nx = n.x; st.ny = n.y; st.nz = n.z;
     // Steering turns the nose (right stick = right turn = yaw decreasing in three.js).
-    const turnRate = mix(BOARD.turnSlow, BOARD.turnFast, clamp(speed / BOARD.turnFastAt, 0, 1));
-    st.yaw -= st.steer * turnRate * dt;
+    const turnRate = mix(B.turnSlow, B.turnFast, clamp(speed / B.turnFastAt, 0, 1));
+    st.yaw -= st.edge * turnRate * dt;
 
     // Board axes on the slope: forward (nose) and side, both in the ground's plane.
     let fx = -Math.sin(st.yaw), fz = -Math.cos(st.yaw), fy = 0;
@@ -124,12 +144,14 @@ function substep(st, input, ground, dt, ollie) {
     let vf = st.vx * fx + st.vy * fy + st.vz * fz;
     const vs = st.vx * sx + st.vy * sy + st.vz * sz;
     const vn = st.vx * n.x + st.vy * n.y + st.vz * n.z;
-    const hold = BOARD.edgeGrip * (1 - BOARD.brakeGripLoss * brake) * Math.max(0, -gn) * dt;
+    const tip = B.flatGrip + (1 - B.flatGrip) * smooth(0, B.edgeFull, Math.abs(st.edge)); // a flat board grips less
+    const hold = B.edgeGrip * tip * (1 - B.brakeGripLoss * brake) * Math.max(0, -gn) * dt;
     const newVs = Math.abs(vs) <= hold ? 0 : vs - Math.sign(vs) * hold;
     // Carving: when the board points roughly along your travel, the sideways speed the edge takes away is turned into the nose's direction
     // (minus a little). The new speed is never more than the old. Riding backwards (switch) carves the same way.
     const along = Math.abs(vf) / (Math.hypot(vf, vs) || 1);
-    const carve = smooth(BOARD.carveFrom, BOARD.carveTo, along) * BOARD.carveKeep * (1 - brake);
+    const carve = smooth(B.carveFrom, B.carveTo, along) * B.carveKeep * (1 - brake);
+    const skidding = speed > 2 ? 1 - smooth(B.skidTo, B.skidFrom, along) : 0; // 0 carving cleanly, 1 well crosswise
     vf = Math.sign(vf) * Math.sqrt(vf * vf + (vs * vs - newVs * newVs) * carve);
     st.vx = fx * vf + sx * newVs + n.x * vn; st.vy = fy * vf + sy * newVs + n.y * vn; st.vz = fz * vf + sz * newVs + n.z * vn;
 
@@ -137,7 +159,7 @@ function substep(st, input, ground, dt, ollie) {
     speed = speedOf(st);
     if (speed > 1e-6) {
       const normalLoad = Math.max(0, -gn);
-      const drag = (BOARD.sandFriction + BOARD.brakeFriction * brake) * normalLoad + mix(BOARD.airDrag, BOARD.tuckDrag, tuck) * speed * speed;
+      const drag = (BOARD.sandFriction + BOARD.brakeFriction * brake + B.skidScrub * skidding) * normalLoad + mix(BOARD.airDrag, BOARD.tuckDrag, tuck) * speed * speed;
       const s2 = Math.max(0, speed - drag * dt);
       const scale = s2 / speed; st.vx *= scale; st.vy *= scale; st.vz *= scale;
     }
@@ -174,6 +196,13 @@ function substep(st, input, ground, dt, ollie) {
     if (st.y - ground_y > BOARD.launchGap) {
       takeOff(st, false);
     } else {
+      // Lifted onto the ground where it curves up under you (a dip, a compression): that climb is paid for out of your speed, so the
+      // snap can never add energy (with the edge letting you slide across the dish more, it otherwise could, a little).
+      const rise = ground_y - st.y;
+      if (rise > 0) {
+        const v = speedOf(st), v2 = Math.max(0, v * v - 2 * g * rise), k = v > 1e-6 ? Math.sqrt(v2) / v : 0;
+        st.vx *= k; st.vy *= k; st.vz *= k;
+      }
       st.y = ground_y;
       // The ground pushes back: drop any speed into it (never pulls you down onto it).
       ground.normalAt(st.x, st.z, n);

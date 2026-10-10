@@ -139,3 +139,18 @@ test('stick axis snapping: near-sideways is a pure spin, near-vertical a pure fl
   assert.ok(dx > 0.6 && dy > 0.6);                 // a real diagonal does both
   assert.deepEqual(axisSnap(-1, 0, 20), [-1, 0]);
 });
+
+test('carving: a smooth turn keeps your speed, yanking the stick at speed skids and scrubs it, and edge changes take a moment', () => {
+  const flat = { heightAt: () => 0, normalAt: (x, z, out) => { out.x = 0; out.y = 1; out.z = 0; return out; } };
+  const turn = stick => {
+    const st = createBoardState({ speed: 30 });
+    for (let t = 0; t < 1.5; t += 1 / 72) stepBoard(st, { steer: stick }, flat, 1 / 72);
+    return speedOf(st);
+  };
+  assert.ok(turn(0.6) - turn(1) > 2, `smooth ${turn(0.6).toFixed(1)} vs yanked ${turn(1).toFixed(1)} m/s`);
+  const st = createBoardState({ speed: 20 });
+  for (let t = 0; t < 1; t += 1 / 72) stepBoard(st, { steer: 1 }, flat, 1 / 72);
+  let t = 0;
+  for (; t < 2; t += 1 / 72) { const y = st.yaw; stepBoard(st, { steer: -1 }, flat, 1 / 72); if (st.yaw > y) break; }
+  assert.ok(t > 0.15 && t < 0.4, `edge to edge took ${(t * 1000).toFixed(0)} ms`);
+});
