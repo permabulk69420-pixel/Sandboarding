@@ -255,7 +255,7 @@ export function createCourse(def = COURSES[0]) {
     return lists[key];
   }
 
-  function heightAt(x, z) {
+  function rawHeightAt(x, z) {
     const cx = Math.floor(x / CELL) - gx0, cz = Math.floor(z / CELL) - gz0;
     const list = cx >= 0 && cz >= 0 && cx < gw && cz < gh ? cellList(cx, cz) : coarse;
     let h = Infinity, near = Infinity, nearI = 0;
@@ -274,6 +274,24 @@ export function createCourse(def = COURSES[0]) {
       h += rough * ((fbm(x * 0.012, z * 0.012, 4) - 0.5) * 14 * smooth(0, 60, out) + (noise(x * 0.09, z * 0.09) - 0.5) * 1.4);
     }
     return h;
+  }
+
+  // A level pad for a building (the lodge): a rectangle set square to the run at `pad.s`, `across` either side of the centre line,
+  // reaching `ahead` metres downhill and `behind` uphill, levelled to the ground's height on the centre line there, and blended back into
+  // the slope over `blend` metres round it.
+  const pad = def.pad ? (() => {
+    const s0 = def.pad.s * k, i = Math.round(s0), [px, pz] = pts[i];
+    return { ...def.pad, x: px, z: pz, tx: tx[i], tz: tz[i], height: rawHeightAt(px, pz), blend: def.pad.blend ?? 16 };
+  })() : null;
+  function heightAt(x, z) {
+    const h = rawHeightAt(x, z);
+    if (!pad) return h;
+    const dx = x - pad.x, dz = z - pad.z;
+    const a = dx * pad.tx + dz * pad.tz; // along the run (downhill +)
+    const c = dx * -pad.tz + dz * pad.tx; // across
+    const out = Math.hypot(Math.max(0, a - pad.ahead, -pad.behind - a), Math.max(0, Math.abs(c) - pad.across));
+    if (out >= pad.blend) return h;
+    return mix(pad.height, h, smooth(0, pad.blend, out));
   }
 
   const EPS = 0.35;
@@ -306,9 +324,11 @@ export function createCourse(def = COURSES[0]) {
   return {
     length, points: pts, heightAt, normalAt, locate, pointAt, elevation, halfWidth,
     id: def.id, name: def.name, startS: def.startS * k, finishS: def.finishS * k, plain: def.plain ?? -16,
+    pad: pad && { x: pad.x, z: pad.z, height: pad.height, s: def.pad.s * k },
     kickers: kickers.map(kk => kk.at),
     // Stretches where the lane is meant to be steep (kicker ramps and landings, the gap), for tests and anything that wants to know.
     features: [...kickers.map(kk => ({ type: 'kicker', from: kk.at - kk.length, to: kk.at + kk.drop })), ...gaps.map(gp => ({ type: 'gap', from: gp.from, to: gp.to })),
-      ...sideHits.map(sh => ({ type: 'side', from: sh.at - sh.length, to: sh.at + sh.drop, offset: sh.offset }))], bounds: { minX: minX - BOUND, maxX: maxX + BOUND, minZ: minZ - BOUND, maxZ: maxZ + BOUND },
+      ...sideHits.map(sh => ({ type: 'side', from: sh.at - sh.length, to: sh.at + sh.drop, offset: sh.offset })),
+      ...(pad ? [{ type: 'pad', from: 0 , to: def.pad.s * k + pad.ahead + pad.blend }] : [])], bounds: { minX: minX - BOUND, maxX: maxX + BOUND, minZ: minZ - BOUND, maxZ: maxZ + BOUND },
   };
 }

@@ -379,7 +379,7 @@ function frame(time) {
     dip += ((charge > 0 ? RUN.chargeDip : 0) - dip) * Math.min(1, dt * 35);
     rig.position.y -= RUN.crouchDrop * crouchAmount + dip;
     feet.set(0, HIPS, 0).applyQuaternion(rig.quaternion);
-    boardMesh.position.set(board.x, board.y + HIPS + 0.005, board.z).sub(feet);
+    boardMesh.position.set(board.x, board.y + HIPS + 0.025, board.z).sub(feet); // 2.5 cm up: the drawn sand is flat between its points, so in a hollow it sits a touch above the real ground
   }
 
   if (!session && playing) hudText.textContent = statusLines().map(l => l.text).join('   ·   ');

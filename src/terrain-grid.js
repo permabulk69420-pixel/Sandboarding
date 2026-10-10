@@ -9,6 +9,8 @@
 
 export const GRID = Object.freeze({
   nearStep: 2.5,
+  laneSplit: 2, // over the lane and the foot of its walls each near square is split this many ways each way (1.25 m), so kickers, lips
+  laneBeyond: 7, // and side hits are smooth: within this many metres past the lane's edge
   nearBeyond: 40, // metres past the lane's edge the fine grid reaches (over the walls and ridges, partway down the mountain's sides)
   tile: 64, // quads per side of a fine tile (160 m)
   farStep: 40,
@@ -102,6 +104,112 @@ function buildGrid(course, { step, x0, z0, cols, rows, keepQuad, heights, tile =
   return { tiles, order: Float32Array.from(order), vertexCount, triangleCount, lattice };
 }
 
+// The near grid: 2.5 m squares, split into 1.25 m ones over the lane and the foot of its walls. Where a big square meets split ones its
+// edge has an extra vertex in the middle, so it is drawn as a fan from its centre to keep the surface closed (no cracks). Built on a
+// 1.25 m lattice; only the points some triangle uses get a height. Same outputs as buildGrid.
+function buildNearGrid(course, { x0, z0, bcols, brows, keepBlock, fineBlock, heights, tile }) {
+  const S = GRID.laneSplit, step = GRID.nearStep / S;
+  const cols = bcols * S + 1, rows = brows * S + 1, n = cols * rows;
+  const keep = new Uint8Array(bcols * brows), fine = new Uint8Array(bcols * brows);
+  for (let bj = 0; bj < brows; bj += 1) for (let bi = 0; bi < bcols; bi += 1) {
+    const b = bj * bcols + bi;
+    keep[b] = keepBlock(bi, bj) ? 1 : 0;
+    fine[b] = keep[b] && fineBlock(bi, bj) ? 1 : 0;
+  }
+  const isFine = (bi, bj) => bi >= 0 && bj >= 0 && bi < bcols && bj < brows && fine[bj * bcols + bi] === 1;
+  const L = (i, j) => j * cols + i; // lattice index
+  // Triangles as lattice index triples (winding as buildGrid's: a, d, b with d below a), and which block each belongs to.
+  const tris = [], triBlock = [];
+  const used = new Uint8Array(n);
+  const y = new Float32Array(n);
+  const blocks = [];
+  for (let bj = 0; bj < brows; bj += 1) for (let bi = 0; bi < bcols; bi += 1) if (keep[bj * bcols + bi]) blocks.push([bi, bj]);
+  const corners = (bi, bj) => { const i = bi * S, j = bj * S; return [L(i, j), L(i + S, j), L(i, j + S), L(i + S, j + S)]; };
+  for (const [bi, bj] of blocks) for (const v of corners(bi, bj)) used[v] = 1;
+  for (const [bi, bj] of blocks) {
+    if (fine[bj * bcols + bi]) for (let j = 0; j <= S; j += 1) for (let i = 0; i <= S; i += 1) used[L(bi * S + i, bj * S + j)] = 1;
+    else if (isFine(bi - 1, bj) || isFine(bi + 1, bj) || isFine(bi, bj - 1) || isFine(bi, bj + 1)) {
+      used[L(bi * S + S / 2, bj * S + S / 2)] = 1; // the fan's centre
+      if (isFine(bi - 1, bj)) used[L(bi * S, bj * S + S / 2)] = 1;
+      if (isFine(bi + 1, bj)) used[L(bi * S + S, bj * S + S / 2)] = 1;
+      if (isFine(bi, bj - 1)) used[L(bi * S + S / 2, bj * S)] = 1;
+      if (isFine(bi, bj + 1)) used[L(bi * S + S / 2, bj * S + S)] = 1;
+    }
+  }
+  // Heights where used (or read in order from the bake).
+  const order = [];
+  let k = 0;
+  for (let i = 0; i < n; i += 1) {
+    if (!used[i]) continue;
+    y[i] = heights ? heights[heights.offset + k++] : course.heightAt(x0 + (i % cols) * step, z0 + Math.floor(i / cols) * step);
+    order.push(y[i]);
+  }
+  if (heights) heights.offset += k;
+  const quad = (a, b, d, e, block) => { // a b / d e, split along the diagonal whose ends are closest in height
+    if (Math.abs(y[a] - y[e]) < Math.abs(y[b] - y[d])) tris.push(a, d, e, a, e, b); else tris.push(a, d, b, b, d, e);
+    triBlock.push(block, block);
+  };
+  for (const [bi, bj] of blocks) {
+    const block = bj * bcols + bi, i0 = bi * S, j0 = bj * S;
+    if (fine[block]) {
+      for (let j = 0; j < S; j += 1) for (let i = 0; i < S; i += 1) quad(L(i0 + i, j0 + j), L(i0 + i + 1, j0 + j), L(i0 + i, j0 + j + 1), L(i0 + i + 1, j0 + j + 1), block);
+      continue;
+    }
+    const c = L(i0 + S / 2, j0 + S / 2);
+    if (!used[c]) { quad(L(i0, j0), L(i0 + S, j0), L(i0, j0 + S), L(i0 + S, j0 + S), block); continue; }
+    // Fan: walk the edge clockwise as seen from above (the same turning as the quads' triangles), taking midpoints where they exist.
+    const ring = [L(i0, j0), L(i0 + S / 2, j0), L(i0 + S, j0), L(i0 + S, j0 + S / 2), L(i0 + S, j0 + S), L(i0 + S / 2, j0 + S), L(i0, j0 + S), L(i0, j0 + S / 2)]
+      .filter(v => used[v]);
+    for (let r = 0; r < ring.length; r += 1) { tris.push(c, ring[(r + 1) % ring.length], ring[r]); triBlock.push(block); }
+  }
+  // Normals from the nearest used neighbours each way (one or two lattice steps), so the split and unsplit parts light the same.
+  const nrm = new Float32Array(n * 3);
+  const side = (i, di, limit) => { for (let d = 1; d <= S; d += 1) { const q = i + di * d; if (d <= limit(d) && used[q]) return [q, d]; } return [i, 0]; };
+  for (let i = 0; i < n; i += 1) {
+    if (!used[i]) continue;
+    const c = i % cols, r = Math.floor(i / cols);
+    const [xa, da] = side(i, -1, d => c - d >= 0 ? d : -1), [xb, db] = side(i, 1, d => c + d < cols ? d : -1);
+    const [za, ea] = side(i, -cols, d => r - d >= 0 ? d : -1), [zb, eb] = side(i, cols, d => r + d < rows ? d : -1);
+    const nx = -(y[xb] - y[xa]) / (((da + db) || 1) * step), nz = -(y[zb] - y[za]) / (((ea + eb) || 1) * step), l = Math.hypot(nx, 1, nz);
+    nrm[i * 3] = nx / l; nrm[i * 3 + 1] = 1 / l; nrm[i * 3 + 2] = nz / l;
+  }
+  // Tiles by block, each with its own compact vertex list.
+  const groups = new Map();
+  for (let t = 0; t < triBlock.length; t += 1) {
+    const b = triBlock[t], key = Math.floor((b % bcols) / tile) + Math.floor(Math.floor(b / bcols) / tile) * 1e6;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(t);
+  }
+  const tiles = [];
+  let vertexCount = 0, triangleCount = 0;
+  for (const list of groups.values()) {
+    const remap = new Map();
+    const vert = i => { let v = remap.get(i); if (v === undefined) { v = remap.size; remap.set(i, v); } return v; };
+    const idx = [];
+    for (const t of list) idx.push(vert(tris[t * 3]), vert(tris[t * 3 + 1]), vert(tris[t * 3 + 2]));
+    const m = remap.size;
+    const positions = new Float32Array(m * 3), normals = new Float32Array(m * 3);
+    for (const [i, v] of remap) {
+      positions[v * 3] = x0 + (i % cols) * step; positions[v * 3 + 1] = y[i]; positions[v * 3 + 2] = z0 + Math.floor(i / cols) * step;
+      normals.set(nrm.subarray(i * 3, i * 3 + 3), v * 3);
+    }
+    tiles.push({ positions, normals, indices: m > 65535 ? Uint32Array.from(idx) : Uint16Array.from(idx), vertexCount: m });
+    vertexCount += m; triangleCount += idx.length / 3;
+  }
+  // For the blowing sand: every lattice point inside a kept block, with heights filled in across the unsplit squares.
+  const filled = new Float32Array(n), known = new Uint8Array(n);
+  for (const [bi, bj] of blocks) {
+    const [a, b, d, e] = corners(bi, bj);
+    for (let j = 0; j <= S; j += 1) for (let i = 0; i <= S; i += 1) {
+      const q = L(bi * S + i, bj * S + j), u = i / S, v = j / S;
+      filled[q] = used[q] && fine[bj * bcols + bi] ? y[q] : (y[a] * (1 - u) + y[b] * u) * (1 - v) + (y[d] * (1 - u) + y[e] * u) * v;
+      known[q] = 1;
+    }
+  }
+  const lattice = { x0, z0, cols, rows, step, heights: filled, used: known };
+  return { tiles, order: Float32Array.from(order), vertexCount, triangleCount, lattice };
+}
+
 // `baked`: optional Float32Array of every used vertex height, fine grid first then coarse (from tools/bake-terrain.js).
 export function buildTerrainGrids(course, baked = null) {
   const heights = baked ? Object.assign(baked, { offset: 0 }) : null;
@@ -121,9 +229,17 @@ export function buildTerrainGrids(course, baked = null) {
     const c = i % ncols, r = Math.floor(i / ncols);
     return mask[Math.min(mrows - 1, Math.round(r / 4)) * mcols + Math.min(mcols - 1, Math.round(c / 4))];
   };
-  const near = buildGrid(course, {
-    step: ns, x0: nx0, z0: nz0, cols: ncols, rows: nrows, heights, tile: GRID.tile,
-    keepQuad: (a, b, d, e) => Math.min(nearBeyond(a), nearBeyond(b), nearBeyond(d), nearBeyond(e)) < GRID.nearBeyond,
+  // A block's corners' distances past the lane's edge, the mask read smoothly (bilinear) so the split band follows the lane closely.
+  const maskAt = (c, r) => {
+    const u = Math.min(mcols - 1.001, c / 4), v = Math.min(mrows - 1.001, r / 4), i = Math.floor(u), j = Math.floor(v), fu = u - i, fv = v - j;
+    const m = (a, b) => mask[b * mcols + a];
+    return (m(i, j) * (1 - fu) + m(i + 1, j) * fu) * (1 - fv) + (m(i, j + 1) * (1 - fu) + m(i + 1, j + 1) * fu) * fv;
+  };
+  const cornerBeyond = (bi, bj) => Math.min(nearBeyond(bj * ncols + bi), nearBeyond(bj * ncols + bi + 1), nearBeyond((bj + 1) * ncols + bi), nearBeyond((bj + 1) * ncols + bi + 1));
+  const near = buildNearGrid(course, {
+    x0: nx0, z0: nz0, bcols: ncols - 1, brows: nrows - 1, heights, tile: GRID.tile,
+    keepBlock: (bi, bj) => cornerBeyond(bi, bj) < GRID.nearBeyond,
+    fineBlock: (bi, bj) => Math.min(maskAt(bi, bj), maskAt(bi + 1, bj), maskAt(bi, bj + 1), maskAt(bi + 1, bj + 1)) < GRID.laneBeyond,
   });
 
   // Coarse grid out to the horizon, with the corridor cut out (one piece: it's light, and mostly in view anyway).

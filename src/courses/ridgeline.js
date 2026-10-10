@@ -74,6 +74,7 @@ export default {
   gaps: GAPS,
   sideHits: SIDE_HITS,
   startS: 50, // the start gate
+  pad: { s: 12, across: 20, ahead: 6, behind: 32 }, // the lodge's level pad on the summit (its door 12 m down the line, facing downhill)
   finishS: 2720, // the finish gate (the slope after it is too gentle to keep you moving: the runout)
   plain: -16, // the desert floor round the mountain
 };

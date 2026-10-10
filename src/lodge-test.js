@@ -13,7 +13,7 @@ export async function placeLodge({ scene, course, url }) {
     else if (!o.isMesh && o !== model) markers[o.name] = o;
   });
   // Where it goes: on the run's centre line 12 m below the top, facing downhill (the model's front faces -z).
-  const p = course.pointAt(12);
+  const p = course.pointAt(course.pad?.s ?? 12);
   const yaw = p.yaw;
   const box = new THREE.Box3().setFromObject(model); // model space (nothing moved yet)
   // Sit the floor just above the highest sand under the footprint, so the sand never pokes through it.
@@ -23,7 +23,7 @@ export async function placeLodge({ scene, course, url }) {
   for (let lx = box.min.x; lx <= box.max.x; lx += 1) for (let lz = box.min.z; lz <= box.max.z; lz += 1) {
     const w = toWorld(lx, lz); top = Math.max(top, course.heightAt(w.x, w.z));
   }
-  const floorY = top + 0.03;
+  const floorY = course.pad ? course.pad.height + 0.02 : top + 0.03; // on the course's level pad, if it has one
   model.position.set(p.x, floorY, p.z);
   model.rotation.y = yaw;
   scene.add(model);

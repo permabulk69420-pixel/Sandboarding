@@ -281,9 +281,13 @@ const SAND_FRAG = /* glsl */`
     }
 
     // Further out, drawn wind ripples: long wavy crests, fading out with distance so they never shimmer.
+    // They also fade wherever one ripple would cover fewer than about four pixels (in a headset that comes much sooner at a glancing angle
+    // than distance alone says), so they never crawl or flicker.
     float near = (1.0 - smoothstep(14.0, 60.0, dist)) * (1.0 - steep) * uDetail * (1.0 - tex);
+    float phBase = dot(q, vec2(0.82, 0.57)) * 4.6;
+    near *= 1.0 - smoothstep(0.9, 1.6, fwidth(phBase)); // radians of ripple per pixel: 6.28 / 4 pixels is about 1.6
     if (near > 0.0) {
-      float ph = dot(q, vec2(0.82, 0.57)) * 4.6 + vnoise(q * 0.27) * 6.0 + vnoise(q * 1.9) * 0.9;
+      float ph = phBase + vnoise(q * 0.27) * 6.0 + vnoise(q * 1.9) * 0.9;
       float slope = cos(ph) * 0.11 * near * (0.6 + 0.4 * vnoise(q * 0.08));
       N = normalize(N + vec3(0.82, 0.0, 0.57) * slope);
     }
@@ -306,13 +310,14 @@ const SAND_FRAG = /* glsl */`
     col = mix(col, col * uShadow / uSand, (1.0 - smoothstep(-0.05, 0.25, nl)) * 0.25);
 
     // Sparkles: a few grains catch the sun.
-    if (uDetail > 0.0) {
+    float cellPx = 1.0 / max(fwidth(q.x * 38.0) + fwidth(q.y * 38.0), 1e-4); // pixels across one sparkle cell
+    if (uDetail > 0.0 && cellPx > 2.5) {
       vec2 cell = floor(q * 38.0);
       float g = fract(sin(dot(cell, vec2(127.1, 311.7))) * 43758.5453);
       vec2 f = fract(q * 38.0) - 0.5;
       float dotShape = 1.0 - smoothstep(0.08, 0.22, length(f));
       float glint = step(0.992, g) * dotShape * pow(max(dot(reflect(-V, N), uSun), 0.0), 18.0) * (1.0 - smoothstep(3.0, 14.0, dist));
-      col += uSunColor * glint * 0.5;
+      col += uSunColor * glint * 0.5 * smoothstep(2.5, 6.0, cellPx); // only where a grain is several pixels across: no pixel-sized flicker
     }
 
     // Haze: the colour of the air that way (the same as the sky at the horizon), warmer toward the sun.
