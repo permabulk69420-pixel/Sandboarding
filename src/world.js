@@ -84,7 +84,8 @@ const SAND_VERT = /* glsl */`
 
 const SAND_FRAG = /* glsl */`
   uniform vec3 uSun, uSunColor, uSand, uShadow, uRock, uBounce, uZenith, uMid, uHorizon, uGlow;
-  uniform float uFog, uDetail;
+  uniform float uFog, uDetail, uTexOn;
+  uniform sampler2D uSandTex; // ripple normal in red/green, brightness detail in blue (ambientCG Ground098, CC0)
   varying vec3 vWorld; varying vec3 vNormal;
   #include <logdepthbuf_pars_fragment>
   ${NOISE_GLSL}
@@ -97,8 +98,25 @@ const SAND_FRAG = /* glsl */`
     vec2 q = vWorld.xz;
     float steep = smoothstep(0.42, 0.62, 1.0 - N.y);
 
-    // Wind ripples: long wavy crests, fading out with distance so they never shimmer.
-    float near = (1.0 - smoothstep(14.0, 60.0, dist)) * (1.0 - steep) * uDetail;
+    // Up close, real sand: a photographed wind-rippled sand texture, its crests turned to face the wind. Two samples at different sizes and
+    // angles, swapped by a slow noise, so the tiling never lines up. It fades out with distance (and before the texture has loaded).
+    float tex = (1.0 - smoothstep(12.0, 30.0, dist)) * (1.0 - steep) * uDetail * uTexOn;
+    float grain = 1.0;
+    if (tex > 0.0) {
+      vec2 U = vec2(-0.57, 0.82), W = vec2(0.82, 0.57); // along the crests, and across them (the wind)
+      vec2 uvA = vec2(dot(q, U), dot(q, W)) / 1.8;
+      vec2 r = vec2(dot(q, vec2(0.92, -0.39)), dot(q, vec2(0.39, 0.92)));
+      vec2 uvB = vec2(dot(r, U), dot(r, W)) / 2.9 + 0.37;
+      vec3 t = mix(texture2D(uSandTex, uvA).rgb, texture2D(uSandTex, uvB).rgb, smoothstep(0.35, 0.65, vnoise(q * 0.12)));
+      vec2 nxy = t.rg * 2.0 - 1.0;
+      vec3 T = normalize(vec3(U.x, 0.0, U.y) - N * dot(vec3(U.x, 0.0, U.y), N));
+      vec3 B = normalize(vec3(W.x, 0.0, W.y) - N * dot(vec3(W.x, 0.0, W.y), N));
+      N = normalize(N + (T * nxy.x + B * nxy.y) * tex);
+      grain = mix(1.0, t.b * 2.0, tex);
+    }
+
+    // Further out, drawn wind ripples: long wavy crests, fading out with distance so they never shimmer.
+    float near = (1.0 - smoothstep(14.0, 60.0, dist)) * (1.0 - steep) * uDetail * (1.0 - tex);
     if (near > 0.0) {
       float ph = dot(q, vec2(0.82, 0.57)) * 4.6 + vnoise(q * 0.27) * 6.0 + vnoise(q * 1.9) * 0.9;
       float slope = cos(ph) * 0.11 * near * (0.6 + 0.4 * vnoise(q * 0.08));
@@ -109,6 +127,7 @@ const SAND_FRAG = /* glsl */`
     float drift = vnoise(q * 0.012) * 0.6 + vnoise(q * 0.06) * 0.4;
     vec3 albedo = mix(uSand * 0.86, uSand * 1.08, drift);
     albedo *= mix(1.0, 0.94 + 0.12 * vnoise(q * 2.3), uDetail); // fine grain up close; its average far away, so near and far match
+    albedo *= grain;
     float strata = 0.85 + 0.15 * sin(vWorld.y * 1.3 + vnoise(q * 0.05) * 3.0);
     albedo = mix(albedo, uRock * strata, steep);
 
@@ -165,6 +184,7 @@ export function createSandMaterial({ detail = 1, offset = 0 } = {}) {
     uniforms: {
       ...shared(), uSunColor: { value: LOOK.sunColor }, uSand: { value: LOOK.sand }, uShadow: { value: LOOK.sandShadow },
       uRock: { value: LOOK.rock }, uBounce: { value: LOOK.bounce }, uFog: { value: LOOK.fogDensity }, uDetail: { value: detail },
+      uSandTex: { value: null }, uTexOn: { value: 0 },
     },
     vertexShader: SAND_VERT, fragmentShader: SAND_FRAG,
   });
@@ -182,7 +202,7 @@ function gridGeometry(grid) {
 }
 
 // Builds the ground from baked heights when they load, or works them out live (slower) if the file is missing.
-export async function createTerrain(course, { url, onStatus = () => {} } = {}) {
+export async function createTerrain(course, { url, sandUrl, onStatus = () => {} } = {}) {
   let baked = null;
   if (url) {
     try {
@@ -195,6 +215,15 @@ export async function createTerrain(course, { url, onStatus = () => {} } = {}) {
   try { grids = buildTerrainGrids(course, baked); } catch (error) { console.warn(error); grids = buildTerrainGrids(course); }
   const group = new THREE.Group(); group.name = 'Terrain';
   const near = new THREE.Mesh(gridGeometry(grids.near), createSandMaterial({ detail: 1 }));
+  if (sandUrl) {
+    new THREE.TextureLoader().load(sandUrl, texture => {
+      texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+      texture.colorSpace = THREE.NoColorSpace; // data, not colour
+      texture.anisotropy = 4;
+      near.material.uniforms.uSandTex.value = texture;
+      near.material.uniforms.uTexOn.value = 1;
+    });
+  }
   near.name = 'Terrain near';
   const far = new THREE.Mesh(gridGeometry(grids.far), createSandMaterial({ detail: 0, offset: 2 }));
   far.name = 'Terrain far';

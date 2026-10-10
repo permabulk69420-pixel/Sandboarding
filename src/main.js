@@ -51,7 +51,7 @@ sunLight.position.copy(LOOK.sun).multiplyScalar(100); scene.add(sunLight);
 
 const course = createCourse();
 const status = document.getElementById('status');
-createTerrain(course, { url: `${BASE}terrain/heights.bin`, onStatus: t => { status.textContent = t; } }).then(terrain => {
+createTerrain(course, { url: `${BASE}terrain/heights.bin`, sandUrl: `${BASE}textures/sand-detail.jpg`, onStatus: t => { status.textContent = t; } }).then(terrain => {
   scene.add(terrain); status.textContent = ''; enterVR.disabled = !xrSupported; playButton.disabled = false;
   enterVR.textContent = xrSupported ? 'Enter VR' : 'VR not available';
 });
