@@ -41,12 +41,11 @@ for (const mesh of doc.getRoot().listMeshes()) {
     const mat = prim.getMaterial()?.getName() || '';
     const before = prim.getIndices().getCount() / 3;
     if (/stitch/i.test(mat)) { console.log('  keep', mesh.getName().slice(0, 14), mat, before); continue; }
-    // The deck's four laminate shells are long, gently curved surfaces carrying the art: keep them dense so the curve and the shading stay smooth.
-    const shell = /Printed composite|ABS sidewall|laminated core|glide base/.test(mat);
-    simplifyPrimitive(prim, shell
-      ? { simplifier: MeshoptSimplifier, ratio: 0.13, error: 0.00008, lockBorder: true }
-      : { simplifier: MeshoptSimplifier, ratio: 0, error: Number(err), lockBorder: true });
-    if (shell) recomputeNormals(prim);
+    // The deck's laminate shells are left exactly as modelled. They are layered a millimetre or so apart (top sheet over sidewall over core),
+    // and simplifying each one on its own moved them through each other: patches of one showed through another, flickering as you moved.
+    // The whole deck is 172k triangles, which the headset handles fine. Only the bindings are simplified.
+    if (mesh.getName().startsWith('Deck')) { console.log('  keep', mesh.getName().slice(0, 14), mat, before); continue; }
+    simplifyPrimitive(prim, { simplifier: MeshoptSimplifier, ratio: 0, error: Number(err), lockBorder: true });
     console.log('  ', mesh.getName().slice(0, 14), mat.padEnd(38), before, '->', prim.getIndices().getCount() / 3);
   }
 }
