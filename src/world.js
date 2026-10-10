@@ -5,39 +5,74 @@ import { buildTerrainGrids } from './terrain-grid.js';
 // stars (the Oasis family look), and sand drawn with a custom shader: real wind ripples up close (a CC0 texture), drawn ripples further
 // out, colour drift, darker rock on the steep faces, sparkles where the sun glints, and haze that takes the sky's colour. Colours are written as sRGB hex and converted to linear for the shaders.
 
+// NB: THREE.Color already turns an sRGB hex into linear, so this converts twice. That is how Ridgeline was tuned, and its look (and the other
+// courses') depends on it: a hex here is "paler" than the colour it makes, and a mid-grey hex makes a dark colour. Keep it, and pick new
+// colours by looking at them.
 const lin = hex => new THREE.Color(hex).convertSRGBToLinear();
 
-export const LOOK = Object.freeze({
-  sun: new THREE.Vector3(-0.55, 0.21, -0.8).normalize(), // low, ahead and to the left as you ride down
-  sunColor: lin('#ffe2c4').multiplyScalar(1.9),
-  zenith: lin('#163447'),
-  mid: lin('#4f8590'),
-  horizon: lin('#e6a68b'),
-  sunGlow: lin('#ffc58c'),
-  sand: lin('#d8b98f'),
-  sandShadow: lin('#9a8070'),
-  rock: lin('#8f6a55'),
-  bounce: lin('#c29e7c'),
-  sandstone: lin('#b67a55'), // the landmarks' rock: sandstone a little redder than the sand, banded
+// A look is everything that makes one run's world feel different from another's: the sky, the sun, the sand, the haze, the planet.
+// The numbers below are Ridgeline's twilight, and every course starts from them. A course may carry a `look` (src/courses/) with only the
+// parts it changes; makeLook() fills in the rest and turns colours (sRGB hex) into the linear colours the shaders use.
+const BASE_LOOK = Object.freeze({
+  sun: [-0.55, 0.21, -0.8], // low, ahead and to the left as you ride down: the way to the sun (the moon, on a night run)
+  sunColor: '#ffe2c4', sunStrength: 1.9,
+  zenith: '#163447',
+  mid: '#4f8590',
+  horizon: '#e6a68b',
+  sunGlow: '#ffc58c',
+  sand: '#d8b98f',
+  sandShadow: '#9a8070',
+  rock: '#8f6a55',
+  bounce: '#c29e7c',
+  sandstone: '#b67a55', // the landmarks' rock: sandstone a little redder than the sand, banded
   fogDensity: 0.0013, // at the level of the dune plain; the haze thins with height (fogHeight), so from up high you see a long way
   fogHeight: 220, // metres: the haze is e times thinner this far above the plain
   fogEnd: 3300, // metres: by here everything has faded into the air (the ground grid stops a little further out: GRID.farMargin)
-  wind: new THREE.Vector2(0.82, 0.57), // x, z: the way the wind blows (across the ripple crests); the blowing sand and the clouds follow it
+  wind: [0.82, 0.57], // x, z: the way the wind blows (across the ripple crests); the blowing sand and the clouds follow it
+  stars: 1, starCut: 0.9965, // how bright the stars are (0 for none, in daylight), and how few there are (the nearer to 1, the fewer)
+  clouds: { amount: 1, cool: [0.74, 0.4, 0.4], warm: [1.25, 0.72, 0.42] }, // high streaks of cloud: how much, and their colour in shadow and in the sun
+  exposure: 1, // the camera's: up for a dim night, down for a blazing noon
+  dust: [1, 1, 1], dustLight: 1, // the blowing sand and the puffs: a tint on their (golden) colour, and how brightly they are lit
+  // The ringed planet (the Oasis one: a banded teal gas giant with cream rings), hanging ahead and to the right as you ride down, so the
+  // sun is on your left and the planet on your right for most of the run. Lit by the same sun, so you see it nearly half lit.
+  planet: {
+    dir: [0.7, 0.36, -0.62],
+    radius: 0.085, // radians: about 10 degrees across; the rings reach a little past twice that
+    ringInner: 1.22, // the rings, in planet radii from its centre
+    ringOuter: 2.28,
+    tilt: 69, // degrees between its spin axis (the rings' normal) and your line of sight: 90 would show the rings edge on
+    roll: -24, // degrees: how far the axis leans over on the sky
+  },
 });
 
-// The ringed planet (the Oasis one: a banded teal gas giant with cream rings), hanging ahead and to the right as you ride down, so the
-// sun is on your left and the planet on your right for most of the run. Lit by the same low sun, so you see it nearly half lit.
-export const PLANET = Object.freeze({
-  dir: new THREE.Vector3(0.7, 0.36, -0.62).normalize(),
-  radius: 0.085, // radians: about 10 degrees across; the rings reach a little past twice that
-  ringInner: 1.22, // the rings, in planet radii from its centre
-  ringOuter: 2.28,
-  tilt: THREE.MathUtils.degToRad(69), // between its spin axis (the rings' normal) and your line of sight: 90 would show the rings edge on
-  roll: THREE.MathUtils.degToRad(-24), // how far the axis leans over on the sky
-});
-const planetRight = new THREE.Vector3().crossVectors(PLANET.dir, new THREE.Vector3(0, 1, 0)).normalize();
-const planetUp = new THREE.Vector3().crossVectors(planetRight, PLANET.dir).normalize();
-const planetAxis = new THREE.Vector3(Math.sin(PLANET.tilt) * Math.sin(PLANET.roll), Math.sin(PLANET.tilt) * Math.cos(PLANET.roll), Math.cos(PLANET.tilt)).normalize();
+export function makeLook(over = {}) {
+  const o = { ...BASE_LOOK, ...over, planet: { ...BASE_LOOK.planet, ...over.planet }, clouds: { ...BASE_LOOK.clouds, ...over.clouds } };
+  return Object.freeze({
+    sun: new THREE.Vector3(...o.sun).normalize(),
+    sunColor: lin(o.sunColor).multiplyScalar(o.sunStrength),
+    zenith: lin(o.zenith),
+    mid: lin(o.mid),
+    horizon: lin(o.horizon),
+    sunGlow: lin(o.sunGlow),
+    sand: lin(o.sand),
+    sandShadow: lin(o.sandShadow),
+    rock: lin(o.rock),
+    bounce: lin(o.bounce),
+    sandstone: lin(o.sandstone),
+    fogDensity: o.fogDensity, fogHeight: o.fogHeight, fogEnd: o.fogEnd,
+    wind: new THREE.Vector2(...o.wind),
+    stars: o.stars, starCut: o.starCut,
+    clouds: Object.freeze({ amount: o.clouds.amount, cool: new THREE.Vector3(...o.clouds.cool), warm: new THREE.Vector3(...o.clouds.warm) }),
+    exposure: o.exposure,
+    dust: new THREE.Vector3(...o.dust), dustLight: o.dustLight,
+    planet: Object.freeze({
+      dir: new THREE.Vector3(...o.planet.dir).normalize(), radius: o.planet.radius, ringInner: o.planet.ringInner, ringOuter: o.planet.ringOuter,
+      tilt: THREE.MathUtils.degToRad(o.planet.tilt), roll: THREE.MathUtils.degToRad(o.planet.roll),
+    }),
+  });
+}
+
+export const LOOK = makeLook(); // Ridgeline's, and the default wherever a look isn't passed in
 const glslVec3 = v => `vec3(${v.x.toFixed(6)}, ${v.y.toFixed(6)}, ${v.z.toFixed(6)})`;
 
 // A small tileable noise texture (two channels of fractal value noise), for the clouds, the planet's bands and the blowing sand. Several
@@ -94,15 +129,20 @@ const AIR_GLSL = /* glsl */`
   vec3 airColour(vec3 d) { return airBase(d) + broadHalo(d) + tightHalo(d); }
 `;
 
-const PLANET_GLSL = /* glsl */`
-  const vec3 PL_DIR = ${glslVec3(PLANET.dir)};
+// The planet's shader code for one look: where it hangs, how big it is and how its rings lie are constants written into the code.
+const planetGlsl = planet => {
+  const planetRight = new THREE.Vector3().crossVectors(planet.dir, new THREE.Vector3(0, 1, 0)).normalize();
+  const planetUp = new THREE.Vector3().crossVectors(planetRight, planet.dir).normalize();
+  const planetAxis = new THREE.Vector3(Math.sin(planet.tilt) * Math.sin(planet.roll), Math.sin(planet.tilt) * Math.cos(planet.roll), Math.cos(planet.tilt)).normalize();
+  return /* glsl */`
+  const vec3 PL_DIR = ${glslVec3(planet.dir)};
   const vec3 PL_RIGHT = ${glslVec3(planetRight)};
   const vec3 PL_UP = ${glslVec3(planetUp)};
   const vec3 PL_AXIS = ${glslVec3(planetAxis)};
-  const float PL_RADIUS = ${PLANET.radius.toFixed(4)};
-  const float PL_RING_IN = ${PLANET.ringInner.toFixed(4)};
-  const float PL_RING_OUT = ${PLANET.ringOuter.toFixed(4)};
-  const float PL_BOUND = ${Math.cos(PLANET.ringOuter * PLANET.radius * 1.12).toFixed(6)};
+  const float PL_RADIUS = ${planet.radius.toFixed(4)};
+  const float PL_RING_IN = ${planet.ringInner.toFixed(4)};
+  const float PL_RING_OUT = ${planet.ringOuter.toFixed(4)};
+  const float PL_BOUND = ${Math.cos(planet.ringOuter * planet.radius * 1.12).toFixed(6)};
 
   // How solid the rings are, rho planet radii from its centre: a faint inner ring, a bright wide one, a dark gap, a thinner outer ring and
   // a hair-thin gap near the edge, with fine ringlets.
@@ -173,16 +213,19 @@ const PLANET_GLSL = /* glsl */`
     return vec4(rgb, alpha);
   }
 `;
+};
 
-const SKY_FRAG = /* glsl */`
+export const skyFragment = look => /* glsl */`
   uniform vec3 uSun, uZenith, uMid, uHorizon, uGlow;
   uniform vec2 uWind;
   uniform sampler2D uNoise;
   uniform float uTime;
+  uniform float uStars, uStarCut, uCloudAmount; // how bright the stars are, the hash above which a cell holds one (fewer as it nears 1), how much cloud
+  uniform vec3 uCloudCool, uCloudWarm; // the cloud's colour on the shadow side and toward the sun
   varying vec3 vWorld;
   ${NOISE_GLSL}
   ${AIR_GLSL}
-  ${PLANET_GLSL}
+  ${planetGlsl(look.planet)}
 
   float starHash(vec3 p) { p = fract(p * 0.1031); p += dot(p, p.zyx + 31.32); return fract((p.x + p.y) * p.z); }
 
@@ -204,11 +247,11 @@ const SKY_FRAG = /* glsl */`
     if (dark > 0.0) {
       vec3 g = d * 190.0, cell = floor(g);
       float r = starHash(cell);
-      if (r > 0.9965) {
+      if (r > uStarCut) {
         vec3 c = cell + 0.5 + (vec3(starHash(cell + 7.1), starHash(cell + 3.3), starHash(cell + 1.7)) - 0.5) * 0.5;
         float star = 1.0 - smoothstep(0.08, 0.3, length(g - c));
         float twinkle = 0.75 + 0.25 * sin(uTime * (1.3 + 2.0 * r) + r * 90.0);
-        col += vec3(0.75, 0.85, 1.0) * star * dark * twinkle * (0.25 + 0.75 * starHash(cell + 11.0)) * 0.55;
+        col += vec3(0.75, 0.85, 1.0) * star * dark * twinkle * (0.25 + 0.75 * starHash(cell + 11.0)) * 0.55 * uStars;
       }
     }
 
@@ -224,8 +267,8 @@ const SKY_FRAG = /* glsl */`
       vec2 b = vec2(dot(p, w) * 0.37 + 0.31, dot(p, side) * 1.3 + 0.62) + vec2(uTime * 0.0021, 0.0);
       float n = texture2D(uNoise, a).r * 0.7 + texture2D(uNoise, b).g * 0.42;
       float cloud = smoothstep(0.6, 0.88, n) * smoothstep(0.03, 0.22, d.y) * (1.0 - 0.7 * smoothstep(0.5, 1.0, d.y));
-      vec3 cloudCol = mix(vec3(0.74, 0.40, 0.40), vec3(1.25, 0.72, 0.42), smoothstep(0.0, 1.0, warmth)) * (0.8 + 0.4 * texture2D(uNoise, b * 2.3).g);
-      col = mix(col, cloudCol, cloud * 0.5 * (1.0 - planet.a * 0.6));
+      vec3 cloudCol = mix(uCloudCool, uCloudWarm, smoothstep(0.0, 1.0, warmth)) * (0.8 + 0.4 * texture2D(uNoise, b * 2.3).g);
+      col = mix(col, cloudCol, cloud * 0.5 * uCloudAmount * (1.0 - planet.a * 0.6));
     }
 
     col += uGlow * 6.0 * smoothstep(0.99955, 0.9998, s); // the sun's disc
@@ -344,18 +387,22 @@ const SAND_FRAG = /* glsl */`
   }
 `;
 
-function shared() {
+function shared(look) {
   return {
-    uSun: { value: LOOK.sun }, uZenith: { value: LOOK.zenith }, uMid: { value: LOOK.mid }, uHorizon: { value: LOOK.horizon },
-    uGlow: { value: LOOK.sunGlow },
+    uSun: { value: look.sun }, uZenith: { value: look.zenith }, uMid: { value: look.mid }, uHorizon: { value: look.horizon },
+    uGlow: { value: look.sunGlow },
   };
 }
 
-export function createSky() {
+export function createSky(look = LOOK) {
   const material = new THREE.ShaderMaterial({
-    uniforms: { ...shared(), uWind: { value: LOOK.wind }, uNoise: { value: getNoiseTexture() }, uTime: worldTime },
+    uniforms: {
+      ...shared(look), uWind: { value: look.wind }, uNoise: { value: getNoiseTexture() }, uTime: worldTime,
+      uStars: { value: look.stars }, uStarCut: { value: look.starCut }, uCloudAmount: { value: look.clouds.amount },
+      uCloudCool: { value: look.clouds.cool }, uCloudWarm: { value: look.clouds.warm },
+    },
     vertexShader: 'varying vec3 vWorld; void main() { vec4 w = modelMatrix * vec4(position, 1.0); vWorld = w.xyz; vec4 p = projectionMatrix * viewMatrix * w; gl_Position = p.xyww; }',
-    fragmentShader: SKY_FRAG, side: THREE.BackSide, depthWrite: false, depthTest: false,
+    fragmentShader: skyFragment(look), side: THREE.BackSide, depthWrite: false, depthTest: false,
   });
   const sky = new THREE.Mesh(new THREE.SphereGeometry(1, 48, 24), material);
   sky.name = 'Sky'; sky.frustumCulled = false; sky.renderOrder = -10;
@@ -364,12 +411,12 @@ export function createSky() {
   return sky;
 }
 
-export function createSandMaterial({ detail = 1, offset = 0, floor = -16, shapeOn = false, rock = LOOK.rock } = {}) {
+export function createSandMaterial({ detail = 1, offset = 0, floor = -16, shapeOn = false, look = LOOK, rock = look.rock } = {}) {
   const material = new THREE.ShaderMaterial({
     uniforms: {
-      ...shared(), uSunColor: { value: LOOK.sunColor }, uSand: { value: LOOK.sand }, uShadow: { value: LOOK.sandShadow },
-      uRock: { value: rock }, uBounce: { value: LOOK.bounce }, uFog: { value: LOOK.fogDensity }, uFogFloor: { value: floor },
-      uFogHeight: { value: LOOK.fogHeight }, uFogEnd: { value: LOOK.fogEnd }, uDetail: { value: detail }, uShapeOn: { value: shapeOn ? 1 : 0 },
+      ...shared(look), uSunColor: { value: look.sunColor }, uSand: { value: look.sand }, uShadow: { value: look.sandShadow },
+      uRock: { value: rock }, uBounce: { value: look.bounce }, uFog: { value: look.fogDensity }, uFogFloor: { value: floor },
+      uFogHeight: { value: look.fogHeight }, uFogEnd: { value: look.fogEnd }, uDetail: { value: detail }, uShapeOn: { value: shapeOn ? 1 : 0 },
       uSandTex: { value: null }, uTexOn: { value: 0 },
     },
     vertexShader: SAND_VERT, fragmentShader: SAND_FRAG,
@@ -389,7 +436,7 @@ function tileGeometry(tile) {
 }
 
 // Builds the ground from baked heights when they load, or works them out live (slower) if the file is missing.
-export async function createTerrain(course, { url, sandUrl, onStatus = () => {} } = {}) {
+export async function createTerrain(course, { url, sandUrl, onStatus = () => {}, look = LOOK } = {}) {
   let baked = null;
   if (url) {
     try {
@@ -405,7 +452,7 @@ export async function createTerrain(course, { url, sandUrl, onStatus = () => {} 
   }
   const group = new THREE.Group(); group.name = 'Terrain';
   const floor = course.plain ?? -16;
-  const nearMaterial = createSandMaterial({ detail: 1, floor, shapeOn: true });
+  const nearMaterial = createSandMaterial({ detail: 1, floor, shapeOn: true, look });
   const near = new THREE.Group(); near.name = 'Terrain near';
   for (const tile of grids.near.tiles) near.add(new THREE.Mesh(tileGeometry(tile), nearMaterial));
   if (sandUrl) {
@@ -417,7 +464,7 @@ export async function createTerrain(course, { url, sandUrl, onStatus = () => {} 
       nearMaterial.uniforms.uTexOn.value = 1;
     });
   }
-  const farMaterial = createSandMaterial({ detail: 0, floor }); // no overlap with the fine grid any more, so no depth offset
+  const farMaterial = createSandMaterial({ detail: 0, floor, look }); // no overlap with the fine grid any more, so no depth offset
   const far = new THREE.Group(); far.name = 'Terrain far';
   for (const tile of grids.far.tiles) far.add(new THREE.Mesh(tileGeometry(tile), farMaterial));
   group.add(far, near);

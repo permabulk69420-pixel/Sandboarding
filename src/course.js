@@ -122,12 +122,12 @@ export function createCourse(def = COURSES[0]) {
   }
 
   // Per-point values, interpolated along each stretch: elevation, lane half width, bank, and the features' height on the centre line.
-  const E = new Float64Array(n), W = new Float64Array(n), B = new Float64Array(n), R = new Float64Array(n), K = new Float64Array(n), KL = new Float64Array(n);
+  const E = new Float64Array(n), W = new Float64Array(n), B = new Float64Array(n), R = new Float64Array(n), K = new Float64Array(n), KL = new Float64Array(n), KE = new Float64Array(n);
   for (let i = 0; i < n; i += 1) {
     let sum = 0, c = 0; // 41 m box smoothing so banks build and fade gently
     for (let j = i - 20; j <= i + 20; j += 1) if (j >= 0 && j < n) { sum += rawK[j]; c += 1; }
     B[i] = clamp((sum / c) * 34, -0.42, 0.42); // rise of the outside of a turn, per metre across the lane: berms you can lean into
-    E[i] = elevation(i); W[i] = halfWidth(i); KL[i] = 6;
+    E[i] = elevation(i); W[i] = halfWidth(i); KL[i] = 6; KE[i] = 1.8;
     for (const r of rollers) if (i >= r.from && i <= r.to) {
       R[i] += r.height * Math.sin(((i - r.from) / r.wavelength) * Math.PI * 2) * smooth(r.from, r.from + 12, i) * (1 - smooth(r.to - 12, r.to, i));
     }
@@ -135,12 +135,12 @@ export function createCourse(def = COURSES[0]) {
       const start = kk.at - kk.length;
       if (i < start || i > kk.at + kk.drop) continue;
       K[i] += kk.height * (i <= kk.at ? ((i - start) / kk.length) ** kk.curve : 1 - smooth(0, 1, (i - kk.at) / kk.drop));
-      KL[i] = kk.lane;
+      KL[i] = kk.lane; KE[i] = Math.max(KE[i], kk.edge ?? 1.8); // the ramp's sides fall away over `edge` metres: a tall ramp needs more than a short one
     }
     for (const gp of gaps) if (i >= gp.from && i <= gp.to) {
       const u = (i - gp.from) / (gp.to - gp.from);
       K[i] -= gp.depth * (u < gp.bottom ? smooth(0, 1, u / gp.bottom) : 1 - smooth(0, 1, (u - gp.bottom) / (1 - gp.bottom)));
-      KL[i] = Math.max(KL[i], gp.lane);
+      KL[i] = Math.max(KL[i], gp.lane); KE[i] = Math.max(KE[i], gp.edge ?? 1.8); // a gap's walls fall away over `edge` metres: deep ones need room to be climbable-looking, not seams
     }
   }
   // The mountain: every 4th centre-line point carries the height of the ridge tops and the lane's half width there, blended smoothly
@@ -193,7 +193,7 @@ export function createCourse(def = COURSES[0]) {
     let h = mix(E[i], E[j], t) + dish * inLane * inLane + mix(B[i], B[j], t) * clamp(cross, -bankReach, bankReach);
     const roll = mix(R[i], R[j], t), kick = mix(K[i], K[j], t);
     if (roll !== 0) h += roll * (1 - smooth(w - 5, w, ad));
-    if (kick !== 0) { const lane = Math.max(KL[i], KL[j]); h += kick * (1 - smooth(lane, lane + 1.8, ad)); } // built sides: a short, sharp fall-off
+    if (kick !== 0) { const lane = Math.max(KL[i], KL[j]), edge = Math.max(KE[i], KE[j]); h += kick * (1 - smooth(lane, lane + edge, ad)); } // built sides: a short, sharp fall-off
     const s = i + t;
     for (let q = 0; q < sideHits.length; q += 1) {
       const sh = sideHits[q];
@@ -327,6 +327,9 @@ export function createCourse(def = COURSES[0]) {
     pad: pad && { x: pad.x, z: pad.z, height: pad.height, s: def.pad.s * k },
     landmarks: (def.landmarks || []).map(l => ({ ...l, s: l.s * k })),
     kickers: kickers.map(kk => kk.at),
+    // How far past each lip (metres along the run) a standing rider may land. Normal kickers throw you about 80 m; a kicker built for a long
+    // flight says so with `reach`, and the tests and ride-check look for the landing that far on.
+    kickerReach: kickers.map(kk => kk.reach ?? 80),
     // Stretches where the lane is meant to be steep (kicker ramps and landings, the gap), for tests and anything that wants to know.
     features: [...kickers.map(kk => ({ type: 'kicker', from: kk.at - kk.length, to: kk.at + kk.drop })), ...gaps.map(gp => ({ type: 'gap', from: gp.from, to: gp.to })),
       ...sideHits.map(sh => ({ type: 'side', from: sh.at - sh.length, to: sh.at + sh.drop, offset: sh.offset })),

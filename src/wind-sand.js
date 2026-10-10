@@ -176,6 +176,8 @@ const FRAGMENT = /* glsl */`
   uniform float uHaze;
   uniform float uBreakup;
   uniform float uTime;
+  uniform vec3 uDust; // a tint on the sand's colour, and how brightly it is lit (the level's look: black ash, white gypsum, night)
+  uniform float uDustLight;
   varying vec2 vUv;
   varying float vAlpha;
   varying float vTone;
@@ -209,11 +211,12 @@ const FRAGMENT = /* glsl */`
     float backlit = pow(max(dot(ray, uSun), 0.0), 4.0); // dust glows when the sun is behind it
     vec3 sand = mix(vec3(0.80, 0.58, 0.35), vec3(0.96, 0.82, 0.60), vTone); // a little paler than the ground
     sand = mix(sand, vec3(0.88, 0.72, 0.52), uHaze); // big soft clouds are paler and greyer: dust haze
+    sand *= uDust;
     vec3 ambient = vec3(0.34, 0.33, 0.36);
     vec3 sun = vec3(1.30, 1.00, 0.74) * (0.55 + 0.9 * backlit);
     float glint = smoothstep(0.86, 1.0, vTone) * (0.5 + 0.5 * sin(uTime * 13.0 + vWorld.x * 7.0 + vWorld.z * 3.0)); // grains flashing
     float lift = mix(1.15, 0.92, smoothstep(0.0, 0.4, uHaze));
-    gl_FragColor = vec4(sand * (ambient + sun) * (lift + 1.3 * glint * (1.0 - uHaze)), min(1.0, a * (1.0 + 0.8 * glint)));
+    gl_FragColor = vec4(sand * (ambient + sun) * (lift + 1.3 * glint * (1.0 - uHaze)) * uDustLight, min(1.0, a * (1.0 + 0.8 * glint)));
     #include <tonemapping_fragment>
     #include <colorspace_fragment>
   }
@@ -257,14 +260,17 @@ function buildLayer(name, layer, shared, center) {
   return mesh;
 }
 
-// lattice: the fine terrain grid (terrain.userData.ground). sun: the shared { value: Vector3 } sun uniform.
-export function createWindSand({ scene, lattice, sun, layers = WIND_SAND.layers }) {
+// lattice: the fine terrain grid (terrain.userData.ground). sun: the shared { value: Vector3 } sun uniform. wind, dust, dustLight: from the
+// level's look (src/world.js makeLook).
+export function createWindSand({ scene, lattice, sun, layers = WIND_SAND.layers, wind = LOOK.wind, dust = LOOK.dust, dustLight = LOOK.dustLight }) {
   const ground = groundTexture(lattice);
   const center = new THREE.Vector3();
   const shared = {
     uSun: sun,
     uTime: { value: 0 },
-    uWind: { value: LOOK.wind.clone().normalize() },
+    uWind: { value: wind.clone().normalize() },
+    uDust: { value: dust },
+    uDustLight: { value: dustLight },
     uGain: { value: 1 },
     uViewHeight: { value: 720 },
     uGroundMap: { value: ground.texture },

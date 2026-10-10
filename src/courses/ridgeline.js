@@ -88,6 +88,7 @@ const LANDMARKS = [
 export default {
   id: 'ridgeline',
   name: 'Ridgeline',
+  blurb: 'The original: a 2.7 km desert ridge of dunes, rollers and friendly kickers.',
   control: CONTROL, // the centre line: hand-placed [x, z] points (metres), smoothed into a curve; the run heads roughly -z
   designLength: DESIGN_LENGTH, // the centre line's length when the s values below were laid out; they stretch if the line changes
   profile: PROFILE, // [s, height] of the lane's centre

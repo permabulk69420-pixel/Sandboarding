@@ -66,7 +66,7 @@ for (const def of COURSES) {
       assert.ok(r.maxSpeed <= BOARD.maxSpeed + 1e-6);
       assert.ok(r.time < 480, `${label}: took ${r.time.toFixed(0)} s`);
     }
-    for (const k of course.kickers) assert.ok(stand.airs.some(a => a.s > k && a.s < k + 80), `no air off the kicker at ${k.toFixed(0)}`);
+    course.kickers.forEach((k, i) => assert.ok(stand.airs.some(a => a.s > k && a.s < k + course.kickerReach[i]), `no air off the kicker at ${k.toFixed(0)}`));
     assert.ok(tuck.time < stand.time, 'tucking is faster');
   });
 }
