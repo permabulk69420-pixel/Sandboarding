@@ -18,6 +18,7 @@ export const LOOK = Object.freeze({
   sandShadow: lin('#9a8070'),
   rock: lin('#8f6a55'),
   bounce: lin('#c29e7c'),
+  sandstone: lin('#b67a55'), // the landmarks' rock: sandstone a little redder than the sand, banded
   fogDensity: 0.0013, // at the level of the dune plain; the haze thins with height (fogHeight), so from up high you see a long way
   fogHeight: 220, // metres: the haze is e times thinner this far above the plain
   fogEnd: 3300, // metres: by here everything has faded into the air (the ground grid stops a little further out: GRID.farMargin)
@@ -363,11 +364,11 @@ export function createSky() {
   return sky;
 }
 
-export function createSandMaterial({ detail = 1, offset = 0, floor = -16, shapeOn = false } = {}) {
+export function createSandMaterial({ detail = 1, offset = 0, floor = -16, shapeOn = false, rock = LOOK.rock } = {}) {
   const material = new THREE.ShaderMaterial({
     uniforms: {
       ...shared(), uSunColor: { value: LOOK.sunColor }, uSand: { value: LOOK.sand }, uShadow: { value: LOOK.sandShadow },
-      uRock: { value: LOOK.rock }, uBounce: { value: LOOK.bounce }, uFog: { value: LOOK.fogDensity }, uFogFloor: { value: floor },
+      uRock: { value: rock }, uBounce: { value: LOOK.bounce }, uFog: { value: LOOK.fogDensity }, uFogFloor: { value: floor },
       uFogHeight: { value: LOOK.fogHeight }, uFogEnd: { value: LOOK.fogEnd }, uDetail: { value: detail }, uShapeOn: { value: shapeOn ? 1 : 0 },
       uSandTex: { value: null }, uTexOn: { value: 0 },
     },

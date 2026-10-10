@@ -67,7 +67,7 @@ let windSand = null; // blowing sand, once the ground has loaded
 const BUILD = typeof __BUILD_ID__ !== 'undefined' ? __BUILD_ID__ : 'dev';
 createTerrain(course, { url: `${BASE}terrain/${course.id}.bin?v=${BUILD}`, sandUrl: `${BASE}textures/sand-detail.jpg`, onStatus: t => { status.textContent = t; } }).then(terrain => {
   scene.add(terrain); status.textContent = ''; enterVR.disabled = !xrSupported; playButton.disabled = false;
-  if (course.landmarks.length && !params.has('nolandmarks')) scene.add(createLandmarks(course, course.landmarks, createSandMaterial({ detail: 1, floor: course.plain })));
+  if (course.landmarks.length && !params.has('nolandmarks')) scene.add(createLandmarks(course, course.landmarks, createSandMaterial({ detail: 1, floor: course.plain, rock: LOOK.sandstone })));
   if (terrain.userData.ground && !params.has('nowind')) windSand = createWindSand({ scene, lattice: terrain.userData.ground, sun: sunUniform });
   enterVR.textContent = xrSupported ? 'Enter VR' : 'VR not available';
 });
