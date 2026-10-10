@@ -51,6 +51,17 @@ const SIDE_HITS = [
   [3500, 14], [3580, -14], [3660, 14], [3740, -14], [3820, 14], [3900, -14], [3980, 14], // the sprint
 ].map(([at, offset]) => ({ ...SIDE_HIT, at, offset }));
 
+// Rails (src/rails.js): bars beside the lane to jump onto, or ride up the ramp at the start of, and grind. from/to: metres along the run;
+// offset: metres right of the centre line (negative = left). Long ones through the sweepers, and a line of three in the sprint.
+const RAILS = [
+  { from: 330, to: 520, offset: 10 }, // the first big sweeper
+  { from: 1040, to: 1250, offset: -10 },
+  { from: 2900, to: 3200, offset: -9 }, // a long one into the wash
+  { from: 3530, to: 3640, offset: 9 }, // the sprint: three in a row, with room to hop off one and land the next
+  { from: 3690, to: 3800, offset: 9 },
+  { from: 3850, to: 3960, offset: 9 },
+];
+
 // Dark rock against the white sand (src/landmarks.js). Near the run: hoodoos, fins and buttes standing a given height above the lane, out
 // 200-340 m: the ground falls away steeply beside the lane, so they have to be tall to show above its shoulder at all. Close in (out
 // 70-110) a few small rocks for something to flash past at speed. Far out: mountain ranges and mesas placed by position and absolute summit
@@ -121,6 +132,7 @@ export default {
   kickers: KICKERS,
   gaps: GAPS,
   sideHits: SIDE_HITS,
+  rails: RAILS,
   landmarks: LANDMARKS,
   startS: 50,
   pad: { s: 12, across: 20, ahead: 6, behind: 32 },

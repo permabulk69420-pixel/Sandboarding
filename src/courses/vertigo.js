@@ -66,6 +66,15 @@ const KICKERS = [
   { at: 2790, length: 30, height: 14, drop: 150, lane: 17, edge: 4, curve: 2.4, reach: 190 }, // the gap's takeoff
   { at: 3700, length: 34, height: 20, drop: 300, lane: 14, edge: 6, curve: 2.4, reach: 200 }, // the last leap
 ];
+// Rails (src/rails.js): bars beside the lane to jump onto, or ride up the ramp at the start of, and grind. from/to: metres along the run;
+// offset: metres right of the centre line (negative = left). They stand clear of the kickers, and well off the racing line. On this
+// mountain every one is steep, and a long grind builds a frightening speed.
+const RAILS = [
+  { from: 100, to: 330, offset: 9 }, // down the first chute, up to the cliff
+  { from: 2420, to: 2640, offset: -9 }, // the bend between the gap and the stepping stones
+  { from: 2990, to: 3095, offset: 9 }, // after the gap's landing, before the canyon
+];
+
 // Spires, fins and buttes of the same red rock, far taller than anything on the other runs (src/landmarks.js).
 const LANDMARKS = [
   { type: 'hoodoo', s: 300, side: 1, out: 250, height: 240, radius: 34 }, // the notch before the cliff
@@ -101,6 +110,7 @@ export default {
   kickers: KICKERS,
   gaps: GAPS,
   sideHits: [],
+  rails: RAILS,
   landmarks: LANDMARKS,
   startS: 50,
   pad: { s: 12, across: 20, ahead: 6, behind: 32 },
