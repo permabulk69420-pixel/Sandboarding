@@ -126,3 +126,41 @@ test('leaning steers past a small dead zone, up to full lock', async () => {
   assert.ok(leanSteer(0.1) > 0.2 && leanSteer(0.1) < 0.6);
   assert.equal(leanSteer(-0.4), -1);
 });
+
+// A big flat-ground launch: hold the flip stick until the board has turned `turn` radians, let go, and report the landing.
+async function flipAndLand(turn, direction = 1) {
+  const ground = { heightAt: () => 0, normalAt: (x, z, out) => { out.x = 0; out.y = 1; out.z = 0; return out; } };
+  const st = createBoardState({ speed: 10 });
+  stepBoard(st, { ollie: 1 }, ground, 1 / 72);
+  st.vy = 9; // plenty of air time
+  let landing = null;
+  for (let t = 0; t < 4 && !landing; t += 1 / 120) {
+    const holding = Math.abs(st.pitch) < turn - 0.35; // let go a little early: the board coasts on briefly
+    stepBoard(st, { pitch: holding ? direction : 0 }, ground, 1 / 120);
+    landing = st.events.find(e => e.type === 'land' || e.type === 'bail') || null;
+  }
+  return landing;
+}
+
+test('a full backflip lands clean and counts as one flip', async () => {
+  const l = await flipAndLand(Math.PI * 2, 1);
+  assert.equal(l.type, 'land', `tilt ${(l.tilt * 57.3).toFixed(0)} deg`);
+  assert.equal(l.flips, 1);
+});
+
+test('a full frontflip counts as minus one', async () => {
+  const l = await flipAndLand(Math.PI * 2, -1);
+  assert.equal(l.type, 'land');
+  assert.equal(l.flips, -1);
+});
+
+test('landing a half flip (upside down) is a bail', async () => {
+  const l = await flipAndLand(Math.PI, 1);
+  assert.equal(l.type, 'bail');
+});
+
+test('landing a bit over-rotated is a heavy landing that costs speed', async () => {
+  const l = await flipAndLand(Math.PI * 2 + 0.5, 1); // lands about 50 degrees past square
+  assert.equal(l.type, 'land', `tilt ${(l.tilt * 57.3).toFixed(0)} deg`);
+  assert.ok(l.heavy, `tilt ${(l.tilt * 57.3).toFixed(0)} deg`);
+});

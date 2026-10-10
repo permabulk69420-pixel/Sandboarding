@@ -17,6 +17,7 @@ export function createInput() {
   function read(session) {
     const out = {
       moveX: 0, moveZ: 0, turn: 0, steer: 0, brake: 0, tuckKey: 0,
+      pitch: 0, // either stick pulled back (+) or pushed forward (-): tilts the board in the air
       a: false, b: false, x: false, y: false, // right A, right B, left X, left Y (edges)
       aHeld: false, aReleased: false, // A held down, and the frame it's let go (the charged jump)
       crouchToggle: false, // right thumbstick click (edge)
@@ -31,6 +32,7 @@ export function createInput() {
         const trig = b[BTN.trigger]?.value ?? 0;
         out.brake = Math.max(out.brake, trig > 0.1 ? trig : 0);
         if (Math.abs(sx) > Math.abs(out.steer)) out.steer = sx;
+        if (Math.abs(sy) > Math.abs(out.pitch)) out.pitch = sy;
         if (source.handedness === 'left') {
           out.moveX = sx; out.moveZ = sy;
           out.x = edge('x', Boolean(b[BTN.primary]?.pressed)); out.y = edge('y', Boolean(b[BTN.secondary]?.pressed));
@@ -50,6 +52,7 @@ export function createInput() {
       out.steer = clamp(Number(k('KeyD') || k('ArrowRight')) - Number(k('KeyA') || k('ArrowLeft')), -1, 1);
       out.brake = Number(k('KeyS') || k('ArrowDown'));
       out.tuckKey = Number(k('KeyW') || k('ArrowUp') || k('ShiftLeft'));
+      out.pitch = Number(k('KeyS') || k('ArrowDown')) - Number(k('KeyW') || k('ArrowUp')); // in the air: S backflip, W frontflip
       const aDown = k('Space') || k('Enter');
       out.a = edge('a', aDown); out.aHeld = aDown; out.aReleased = edge('a-up', !aDown);
       out.crouchToggle = edge('rs', k('KeyC'));

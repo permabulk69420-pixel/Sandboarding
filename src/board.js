@@ -32,17 +32,27 @@ export const BOARD = Object.freeze({
   maxSpeed: 30,
   substep: 1 / 120,
   bailAngle: 1.15, // radians between the board's line and your travel on landing before it counts as a crash (about 66 degrees)
+  flipRate: 5.6, // radians per second of tilt (flip) in the air at full stick: a full flip in a little over a second
+  flipResponse: 7, // per second: how quickly the tilt follows the stick
+  settle: 6, // per second: with the stick centred, how quickly the board lines up with the ground below you
+  landClean: 0.52, // radians (30 degrees) between the board and the ground on landing that still counts as clean...
+  landBail: 0.96, // ...and beyond this (55 degrees) you bail; in between is a heavy landing
+  heavyKeep: 0.72, // share of your speed a heavy landing keeps
 });
 
 // state: { x, y, z, vx, vy, vz, yaw, steer, grounded, air, nx, ny, nz }
 export function createBoardState({ x = 0, y = 0, z = 0, yaw = 0, speed = 0 } = {}) {
   const fx = -Math.sin(yaw), fz = -Math.cos(yaw);
-  return { x, y, z, vx: fx * speed, vy: 0, vz: fz * speed, yaw, steer: 0, grounded: true, air: 0, nx: 0, ny: 1, nz: 0, events: [] };
+  return {
+    x, y, z, vx: fx * speed, vy: 0, vz: fz * speed, yaw, steer: 0, grounded: true, air: 0, nx: 0, ny: 1, nz: 0, events: [],
+    pitch: 0, pitchVel: 0, upx: 0, upy: 1, upz: 0, yaw0: yaw, // in the air: tilt from the ground's angle below, and the yaw you left at
+  };
 }
 
 export const speedOf = st => Math.hypot(st.vx, st.vy, st.vz);
 
-// input: { steer: -1..1 (positive = right), brake: 0..1, tuck: 0..1, ollie: false, or the jump's charge 0..1 on the frame you release it }
+// input: { steer: -1..1 (positive = right), brake: 0..1, tuck: 0..1, ollie: false, or the jump's charge 0..1 on the frame you release it,
+//   pitch: -1..1 in the air (positive = nose up, toward a backflip) }
 // ground: { heightAt(x, z), normalAt(x, z, out) }
 // Returns the state (mutated). `events` collects { type: 'launch' | 'land' | 'bail', ... } for sound and haptics; the caller clears it.
 export function stepBoard(st, input, ground, dt) {
@@ -64,6 +74,26 @@ export function leanSteer(offset) {
 
 
 const n = { x: 0, y: 1, z: 0 };
+
+function takeOff(st, ollie) {
+  st.grounded = false; st.air = 0; st.pitch = 0; st.pitchVel = 0; st.yaw0 = st.yaw;
+  st.upx = st.nx; st.upy = st.ny; st.upz = st.nz;
+  st.events.push({ type: 'launch', ollie, speed: speedOf(st) });
+}
+
+// Which way the board faces: { f: forward (nose), u: up }. On the ground it lies on the sand. In the air it starts from the ground's angle
+// below you (so with the stick centred you land square) and is tilted by your flip about its own side axis.
+export function boardAttitude(st, out = { f: { x: 0, y: 0, z: -1 }, u: { x: 0, y: 1, z: 0 } }) {
+  const ux = st.grounded ? st.nx : st.upx, uy = st.grounded ? st.ny : st.upy, uz = st.grounded ? st.nz : st.upz;
+  let fx = -Math.sin(st.yaw), fz = -Math.cos(st.yaw), fy = 0;
+  const d = fx * ux + fz * uz; fx -= ux * d; fy -= uy * d; fz -= uz * d;
+  const l = Math.hypot(fx, fy, fz) || 1; fx /= l; fy /= l; fz /= l;
+  const p = st.grounded ? 0 : st.pitch, c = Math.cos(p), s = Math.sin(p);
+  out.f.x = fx * c + ux * s; out.f.y = fy * c + uy * s; out.f.z = fz * c + uz * s;
+  out.u.x = ux * c - fx * s; out.u.y = uy * c - fy * s; out.u.z = uz * c - fz * s;
+  return out;
+}
+const att = { f: { x: 0, y: 0, z: -1 }, u: { x: 0, y: 1, z: 0 } };
 
 function substep(st, input, ground, dt, ollie) {
   const g = BOARD.gravity;
@@ -115,13 +145,21 @@ function substep(st, input, ground, dt, ollie) {
     if (ollie !== false) {
       const pop = BOARD.ollie * mix(BOARD.ollieTap, BOARD.ollieFull, ollie);
       st.vx += n.x * pop; st.vy += n.y * pop; st.vz += n.z * pop;
-      st.grounded = false; st.air = 0; st.events.push({ type: 'launch', ollie: true, speed: speedOf(st) });
+      takeOff(st, true);
     }
   } else {
     st.vy -= g * dt;
     const s = speedOf(st);
     if (s > 1e-6) { const s2 = Math.max(0, s - BOARD.airDrag * s * s * dt); const k = s2 / s; st.vx *= k; st.vy *= k; st.vz *= k; }
     st.yaw -= st.steer * BOARD.airTurn * dt;
+    // Flip: the stick tilts the board about its side axis. The starting angle drifts toward the ground below so a plain jump lands square.
+    const target = clamp(input.pitch || 0, -1, 1) * BOARD.flipRate;
+    st.pitchVel += (target - st.pitchVel) * Math.min(1, BOARD.flipResponse * dt);
+    st.pitch += st.pitchVel * dt;
+    ground.normalAt(st.x, st.z, n);
+    const k = Math.min(1, BOARD.settle * dt);
+    st.upx += (n.x - st.upx) * k; st.upy += (n.y - st.upy) * k; st.upz += (n.z - st.upz) * k;
+    const ul = Math.hypot(st.upx, st.upy, st.upz) || 1; st.upx /= ul; st.upy /= ul; st.upz /= ul;
     st.air += dt;
   }
 
@@ -134,7 +172,7 @@ function substep(st, input, ground, dt, ollie) {
 
   if (st.grounded) {
     if (st.y - ground_y > BOARD.launchGap) {
-      st.grounded = false; st.air = 0; st.events.push({ type: 'launch', ollie: false, speed: speedOf(st) });
+      takeOff(st, false);
     } else {
       st.y = ground_y;
       // The ground pushes back: drop any speed into it (never pulls you down onto it).
@@ -148,15 +186,24 @@ function substep(st, input, ground, dt, ollie) {
     const vn = st.vx * n.x + st.vy * n.y + st.vz * n.z;
     const impact = Math.max(0, -vn);
     st.vx -= n.x * vn; st.vy -= n.y * vn; st.vz -= n.z * vn;
-    st.grounded = true;
-    // Landing crosswise: the board can't carve that, you bail and lose most of your speed. Landing backwards (switch) is fine.
+    // How the landing went: the board's angle to the ground (flips), and its line against your travel (crosswise can't carve).
+    boardAttitude(st, att);
+    const tilt = Math.acos(clamp(att.u.x * n.x + att.u.y * n.y + att.u.z * n.z, -1, 1));
     const off = Math.abs(angleDelta(st.yaw, Math.atan2(-st.vx, -st.vz)));
     const crosswise = Math.min(off, Math.PI - off);
-    if (crosswise > BOARD.bailAngle && speedOf(st) > 3) {
+    const trick = {
+      flips: Math.round(st.pitch / (Math.PI * 2)), // + backflips, - frontflips
+      spin: Math.round((st.yaw - st.yaw0) / Math.PI) * 180, // degrees, + to the left
+    };
+    st.grounded = true; st.nx = n.x; st.ny = n.y; st.nz = n.z; st.pitch = 0; st.pitchVel = 0;
+    const fast = speedOf(st) > 3;
+    if (fast && (tilt > BOARD.landBail || crosswise > BOARD.bailAngle)) {
       st.vx *= 0.25; st.vy *= 0.25; st.vz *= 0.25;
-      st.events.push({ type: 'bail', impact, air: st.air });
+      st.events.push({ type: 'bail', impact, air: st.air, tilt, ...trick });
     } else {
-      st.events.push({ type: 'land', impact, air: st.air });
+      const heavy = tilt > BOARD.landClean;
+      if (heavy) { st.vx *= BOARD.heavyKeep; st.vy *= BOARD.heavyKeep; st.vz *= BOARD.heavyKeep; }
+      st.events.push({ type: 'land', impact, air: st.air, tilt, heavy, ...trick });
     }
     st.air = 0;
   }

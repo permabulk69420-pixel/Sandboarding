@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import './style.css';
 import { createCourse } from './course.js';
-import { createBoardState, stepBoard, speedOf, leanSteer, BOARD } from './board.js';
+import { createBoardState, stepBoard, speedOf, leanSteer, boardAttitude, BOARD } from './board.js';
 import { clamp, angleDelta } from './math.js';
 import { createSky, createTerrain, LOOK } from './world.js';
 import { createGate, createLaneFlags, createBoardMesh, loadBoardModel } from './props.js';
@@ -166,6 +166,8 @@ addEventListener('resize', () => { if (renderer.xr.isPresenting) return; camera.
 
 // ---------------------------------------------------------------- per frame
 const tmpN = new THREE.Vector3(), tmpF = new THREE.Vector3(), tmpR = new THREE.Vector3(), basis = new THREE.Matrix4();
+const yawQ = new THREE.Quaternion(), flipQ = new THREE.Quaternion(), X_AXIS = new THREE.Vector3(1, 0, 0), Y_AXIS = new THREE.Vector3(0, 1, 0), feet = new THREE.Vector3(), lift = new THREE.Vector3();
+const HIPS = 0.9; // metres above the board: flips turn you around here, like a rider's body
 const smoothUp = new THREE.Vector3(0, 1, 0);
 const headWorld = new THREE.Vector3();
 let lastTime = 0;
@@ -221,7 +223,7 @@ function frame(time) {
     rig.position.addScaledVector(tmpF, -mz * RUN.walkSpeed * dt).addScaledVector(tmpR, mx * RUN.walkSpeed * dt);
     rig.position.y = course.heightAt(rig.position.x, rig.position.z);
     rigYaw -= inp.turn * RUN.turnSpeed * dt; // smooth turning
-    rig.rotation.y = rigYaw;
+    rig.rotation.set(0, rigYaw, 0); // level (clears any flip left over from a run)
     const g = course.pointAt(course.startS);
     camera.getWorldPosition(headWorld);
     const near = Math.hypot(headWorld.x - g.x, headWorld.z - g.z) < 7;
@@ -259,12 +261,19 @@ function frame(time) {
       }
       if (inp.aReleased && charge > 0) { if (board.grounded && mode === 'ride') ollie = charge; charge = 0; }
       if (!board.grounded) charge = 0;
-      stepBoard(board, { steer, brake, tuck, ollie }, course, dt);
+      stepBoard(board, { steer, brake, tuck, ollie, pitch: inp.pitch }, course, dt);
       const speed = speedOf(board);
 
       for (const e of board.events) {
-        if (e.type === 'land') { audio.thump(Math.min(1, e.impact / 8)); if (e.impact > 2) puffs.impact(board.x, board.z, { size: 0.7, strength: Math.min(1, e.impact / 8) }); handsPulse(Math.min(1, 0.25 + e.impact / 10), 60); }
-        if (e.type === 'bail') { audio.thump(1); puffs.impact(board.x, board.z, { size: 1, strength: 1 }); handsPulse(1, 160); }
+        if (e.type === 'land') {
+          const hit = Math.min(1, e.impact / 8 + (e.heavy ? 0.35 : 0)); // a heavy (badly angled) landing hits harder
+          audio.thump(hit); if (e.impact > 2 || e.heavy) puffs.impact(board.x, board.z, { size: 0.7, strength: hit }); handsPulse(Math.min(1, 0.25 + hit * 0.7), e.heavy ? 110 : 60);
+        }
+        if (e.type === 'bail') {
+          // A crash: thump, sand everywhere, then a quick fade and you're back on your feet on the run, a little slower.
+          audio.thump(1); puffs.impact(board.x, board.z, { size: 1.2, strength: 1 }); handsPulse(1, 200);
+          if (mode === 'ride') fadeThen(() => { boardAt(course.locate(board.x, board.z).s, 5); lostFor = 0; });
+        }
       }
       board.events.length = 0;
 
@@ -307,17 +316,31 @@ function frame(time) {
     }
 
     // Board and rider follow the physics. The board tilts with the ground; your view only turns, never rolls or pitches.
-    if (board.grounded) tmpN.set(board.nx, board.ny, board.nz); else tmpN.set(0, 1, 0);
-    smoothUp.lerp(tmpN, Math.min(1, dt * (board.grounded ? 14 : 3))).normalize();
-    tmpF.set(-Math.sin(board.yaw), 0, -Math.cos(board.yaw)); tmpF.addScaledVector(smoothUp, -tmpF.dot(smoothUp)).normalize();
+    // On the sand the board follows the ground (smoothed); in the air it shows your flip.
+    if (board.grounded) {
+      tmpN.set(board.nx, board.ny, board.nz);
+      smoothUp.lerp(tmpN, Math.min(1, dt * 14)).normalize();
+      tmpF.set(-Math.sin(board.yaw), 0, -Math.cos(board.yaw)); tmpF.addScaledVector(smoothUp, -tmpF.dot(smoothUp)).normalize();
+    } else {
+      const a = boardAttitude(board);
+      smoothUp.set(a.u.x, a.u.y, a.u.z); tmpF.set(a.f.x, a.f.y, a.f.z);
+    }
     tmpR.crossVectors(tmpF, smoothUp).normalize();
     basis.makeBasis(tmpR, smoothUp, tmpF.clone().negate());
     boardMesh.quaternion.setFromRotationMatrix(basis);
-    boardMesh.position.set(board.x, board.y + 0.005, board.z);
+
+    // Your view turns with the board (yaw always; in the air the flip too: the Full Send camera), pivoting at your hips so the board stays
+    // under your feet. On the sand the view stays level: it never tilts with the slope.
     rigYaw += angleDelta(rigYaw, board.yaw) * Math.min(1, dt * 10);
-    rig.rotation.y = rigYaw;
-    const c = Math.cos(rigYaw), s = Math.sin(rigYaw);
-    rig.position.set(board.x - (c * headOffset.x + s * headOffset.y), board.y + 0.04 - RUN.crouchDrop * crouchAmount, board.z - (-s * headOffset.x + c * headOffset.y));
+    yawQ.setFromAxisAngle(Y_AXIS, rigYaw);
+    flipQ.setFromAxisAngle(X_AXIS, board.grounded ? 0 : board.pitch);
+    rig.quaternion.copy(yawQ).multiply(flipQ);
+    // Feet: the hips (above the board) minus your body, turned with you. Your real head's spot in the play space stays over the board.
+    lift.set(headOffset.x, HIPS, headOffset.y).applyQuaternion(rig.quaternion);
+    rig.position.set(board.x, board.y + HIPS + 0.04, board.z).sub(lift);
+    rig.position.y -= RUN.crouchDrop * crouchAmount;
+    feet.set(0, HIPS, 0).applyQuaternion(rig.quaternion);
+    boardMesh.position.set(board.x, board.y + HIPS + 0.005, board.z).sub(feet);
   }
 
   if (!session && playing) hudText.textContent = statusLines().map(l => l.text).join('   ·   ');
