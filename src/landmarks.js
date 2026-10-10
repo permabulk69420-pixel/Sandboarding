@@ -62,16 +62,20 @@ const SHAPES = {
 
 // course: needs pointAt and heightAt. landmarks: [{ type, s, side (-1 left / 1 right), out (metres from the centre line), height,
 // radius, seed, turn }]. material: the sand material to draw them with.
+// Two optional ways to place one without reference to the run's height there, for a run that falls a long way (a far mountain range
+// shouldn't sink as the run does): `top` is the absolute elevation of its summit (instead of `height` above the lane at `s`), and
+// `at: [x, z]` is an absolute position (instead of `s`, `side` and `out`).
 export function createLandmarks(course, landmarks, material) {
   const parts = [];
   for (const [i, l] of landmarks.entries()) {
-    const p = course.pointAt(l.s), fx = -Math.sin(p.yaw), fz = -Math.cos(p.yaw);
-    const x = p.x + -fz * l.out * l.side, z = p.z + fx * l.out * l.side;
+    const p = course.pointAt(l.s ?? 0), fx = -Math.sin(p.yaw), fz = -Math.cos(p.yaw);
+    const [x, z] = l.at ?? [p.x + -fz * l.out * l.side, p.z + fx * l.out * l.side];
     // The base sinks well into the sand at the lowest point round the footprint (so it never floats on a slope); the top stands `height`
     // above the lane there, so it always rises over the ridges you see from the run, however far down the mountain's side it stands.
     let low = Infinity;
     for (let a = 0; a < 12; a += 1) low = Math.min(low, course.heightAt(x + Math.cos(a) * l.radius * 1.6, z + Math.sin(a) * l.radius * 1.6));
-    const base = low - Math.max(2, l.height * 0.06), top = Math.max(p.y + l.height, low + l.height * 0.6);
+    const height = l.top !== undefined ? l.top - low : l.height;
+    const base = low - Math.max(2, height * 0.06), top = l.top ?? Math.max(p.y + l.height, low + l.height * 0.6);
     const g = SHAPES[l.type]({ height: top - base, radius: l.radius, lean: l.lean ?? 0 }, l.seed ?? (i * 7919 + 13));
     g.rotateY(l.turn ?? (i * 2.39996));
     g.translate(x, base, z);

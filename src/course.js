@@ -325,7 +325,7 @@ export function createCourse(def = COURSES[0]) {
     length, points: pts, heightAt, normalAt, locate, pointAt, elevation, halfWidth,
     id: def.id, name: def.name, startS: def.startS * k, finishS: def.finishS * k, plain: def.plain ?? -16,
     pad: pad && { x: pad.x, z: pad.z, height: pad.height, s: def.pad.s * k },
-    landmarks: (def.landmarks || []).map(l => ({ ...l, s: l.s * k })),
+    landmarks: (def.landmarks || []).map(l => (l.s === undefined ? l : { ...l, s: l.s * k })), // placed by `at` rather than `s`: nothing to scale
     kickers: kickers.map(kk => kk.at),
     // How far past each lip (metres along the run) a standing rider may land. Normal kickers throw you about 80 m; a kicker built for a long
     // flight says so with `reach`, and the tests and ride-check look for the landing that far on.

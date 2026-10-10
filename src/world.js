@@ -9,6 +9,10 @@ import { buildTerrainGrids } from './terrain-grid.js';
 // courses') depends on it: a hex here is "paler" than the colour it makes, and a mid-grey hex makes a dark colour. Keep it, and pick new
 // colours by looking at them.
 const lin = hex => new THREE.Color(hex).convertSRGBToLinear();
+// A colour in a look is either a hex string (squared, as above) or an [r, g, b] triple used exactly as written: linear light, 0 to 1 and
+// beyond. The triple is the one to reach for when a look is very dark or very bright (a moonlit night, a white noon), where squared hex is
+// hard to reason about.
+const colour = v => (Array.isArray(v) ? new THREE.Color().setRGB(v[0], v[1], v[2], THREE.LinearSRGBColorSpace) : lin(v));
 
 // A look is everything that makes one run's world feel different from another's: the sky, the sun, the sand, the haze, the planet.
 // The numbers below are Ridgeline's twilight, and every course starts from them. A course may carry a `look` (src/courses/) with only the
@@ -30,8 +34,12 @@ const BASE_LOOK = Object.freeze({
   fogEnd: 3300, // metres: by here everything has faded into the air (the ground grid stops a little further out: GRID.farMargin)
   wind: [0.82, 0.57], // x, z: the way the wind blows (across the ripple crests); the blowing sand and the clouds follow it
   stars: 1, starCut: 0.9965, // how bright the stars are (0 for none, in daylight), and how few there are (the nearer to 1, the fewer)
+  starFrom: [0.3, 0.75], // stars start to show this far up the sky (the sine of the elevation) and are at full strength by the second number
+  sunBand: [1.05, 0.80, 0.55], // the pale band of colour that climbs over the sun (linear light): gold at twilight, cool for a moon, white at noon
+  sunSize: 1, // the sun's disc as a multiple of the usual size (a moon can be bigger)
   clouds: { amount: 1, cool: [0.74, 0.4, 0.4], warm: [1.25, 0.72, 0.42] }, // high streaks of cloud: how much, and their colour in shadow and in the sun
   exposure: 1, // the camera's: up for a dim night, down for a blazing noon
+  mirage: 0, // 0 to 1: far, flat ground turns to wobbling pools that mirror the sky (a hot noon; off at twilight)
   dust: [1, 1, 1], dustLight: 1, // the blowing sand and the puffs: a tint on their (golden) colour, and how brightly they are lit
   // The ringed planet (the Oasis one: a banded teal gas giant with cream rings), hanging ahead and to the right as you ride down, so the
   // sun is on your left and the planet on your right for most of the run. Lit by the same sun, so you see it nearly half lit.
@@ -49,21 +57,24 @@ export function makeLook(over = {}) {
   const o = { ...BASE_LOOK, ...over, planet: { ...BASE_LOOK.planet, ...over.planet }, clouds: { ...BASE_LOOK.clouds, ...over.clouds } };
   return Object.freeze({
     sun: new THREE.Vector3(...o.sun).normalize(),
-    sunColor: lin(o.sunColor).multiplyScalar(o.sunStrength),
-    zenith: lin(o.zenith),
-    mid: lin(o.mid),
-    horizon: lin(o.horizon),
-    sunGlow: lin(o.sunGlow),
-    sand: lin(o.sand),
-    sandShadow: lin(o.sandShadow),
-    rock: lin(o.rock),
-    bounce: lin(o.bounce),
-    sandstone: lin(o.sandstone),
+    sunColor: colour(o.sunColor).multiplyScalar(o.sunStrength),
+    zenith: colour(o.zenith),
+    mid: colour(o.mid),
+    horizon: colour(o.horizon),
+    sunGlow: colour(o.sunGlow),
+    sand: colour(o.sand),
+    sandShadow: colour(o.sandShadow),
+    rock: colour(o.rock),
+    bounce: colour(o.bounce),
+    sandstone: colour(o.sandstone),
     fogDensity: o.fogDensity, fogHeight: o.fogHeight, fogEnd: o.fogEnd,
     wind: new THREE.Vector2(...o.wind),
-    stars: o.stars, starCut: o.starCut,
+    stars: o.stars, starCut: o.starCut, starFrom: new THREE.Vector2(...o.starFrom),
+    sunBand: new THREE.Vector3(...o.sunBand),
+    sunDisc: new THREE.Vector2(Math.cos(Math.acos(0.99955) * o.sunSize), Math.cos(Math.acos(0.9998) * o.sunSize)), // the cosines where the disc's edge starts and ends
+
     clouds: Object.freeze({ amount: o.clouds.amount, cool: new THREE.Vector3(...o.clouds.cool), warm: new THREE.Vector3(...o.clouds.warm) }),
-    exposure: o.exposure,
+    exposure: o.exposure, mirage: o.mirage,
     dust: new THREE.Vector3(...o.dust), dustLight: o.dustLight,
     planet: Object.freeze({
       dir: new THREE.Vector3(...o.planet.dir).normalize(), radius: o.planet.radius, ringInner: o.planet.ringInner, ringOuter: o.planet.ringOuter,
@@ -222,6 +233,8 @@ export const skyFragment = look => /* glsl */`
   uniform float uTime;
   uniform float uStars, uStarCut, uCloudAmount; // how bright the stars are, the hash above which a cell holds one (fewer as it nears 1), how much cloud
   uniform vec3 uCloudCool, uCloudWarm; // the cloud's colour on the shadow side and toward the sun
+  uniform vec3 uSunBand; // the pale band over the sun
+  uniform vec2 uSunDisc, uStarFrom; // where the sun's disc starts and ends (cosines), and the heights the stars fade in over
   varying vec3 vWorld;
   ${NOISE_GLSL}
   ${AIR_GLSL}
@@ -240,10 +253,10 @@ export const skyFragment = look => /* glsl */`
     col = mix(col, uZenith, smoothstep(0.25, 0.95, h));
     col += broadHalo(d) * (1.0 - smoothstep(0.0, 0.42, h)) + tightHalo(d);
     // Over the sun the warm band climbs higher and turns pale gold, so it meets the teal through light colours, not a muddy brown.
-    col = mix(col, vec3(1.05, 0.80, 0.55), pow(s, 6.0) * smoothstep(0.0, 0.22, h) * (1.0 - smoothstep(0.1, 0.55, h)) * 0.45);
+    col = mix(col, uSunBand, pow(s, 6.0) * smoothstep(0.0, 0.22, h) * (1.0 - smoothstep(0.1, 0.55, h)) * 0.45);
 
     // A few stars where the sky is darkest, away from the sun. Each is a soft dot a pixel or two across, twinkling slowly.
-    float dark = smoothstep(0.3, 0.75, h) * (1.0 - smoothstep(0.0, 0.5, warmth));
+    float dark = smoothstep(uStarFrom.x, uStarFrom.y, h) * (1.0 - smoothstep(0.0, 0.5, warmth));
     if (dark > 0.0) {
       vec3 g = d * 190.0, cell = floor(g);
       float r = starHash(cell);
@@ -271,7 +284,7 @@ export const skyFragment = look => /* glsl */`
       col = mix(col, cloudCol, cloud * 0.5 * uCloudAmount * (1.0 - planet.a * 0.6));
     }
 
-    col += uGlow * 6.0 * smoothstep(0.99955, 0.9998, s); // the sun's disc
+    col += uGlow * 6.0 * smoothstep(uSunDisc.x, uSunDisc.y, s); // the sun's disc
     if (d.y < 0.0) col = airColour(d); // below the horizon: past the edge of the desert, only the haze
     gl_FragColor = vec4(col, 1.0);
     #include <tonemapping_fragment>
@@ -295,7 +308,7 @@ const SAND_VERT = /* glsl */`
 
 const SAND_FRAG = /* glsl */`
   uniform vec3 uSun, uSunColor, uSand, uShadow, uRock, uBounce, uZenith, uMid, uHorizon, uGlow;
-  uniform float uFog, uFogFloor, uFogHeight, uFogEnd, uDetail, uTexOn;
+  uniform float uFog, uFogFloor, uFogHeight, uFogEnd, uDetail, uTexOn, uMirage, uTime;
   varying vec2 vShape;
   uniform sampler2D uSandTex; // ripple normal in red/green, brightness detail in blue (ambientCG Ground098, CC0)
   varying vec3 vWorld; varying vec3 vNormal;
@@ -381,6 +394,21 @@ const SAND_FRAG = /* glsl */`
     float thick = abs(yb - ya) > 0.01 ? (exp(-ya) - exp(-yb)) / (yb - ya) : exp(-ya);
     float fog = max(1.0 - exp(-pow(uFog * dist * thick, 1.6)), smoothstep(uFogEnd - 500.0, uFogEnd, dist));
     col = mix(col, airColour(-V), fog);
+
+    // A mirage (only where a look asks for one): far, level ground turns to pools that mirror the sky, darker and bluer than the sand
+    // round them, their edges wobbling in the heat. All of it is a function of where the ground is, never of the screen, so both eyes
+    // and every frame agree. It keeps clear of the run itself (nothing nearer than a few hundred metres) and fades into the haze.
+    if (uMirage > 0.0 && dist > 260.0) { // (nothing nearer than that is ever touched, so the near ground never pays for it)
+      vec2 wob = vec2(sin(q.y * 0.043 + uTime * 0.7), cos(q.x * 0.037 - uTime * 0.55)) * 14.0;
+      vec2 w = (q + wob) * 0.0018;
+      float field = vnoise(w + vec2(3.1, 7.7)) * 0.62 + vnoise(w * 2.9 + vec2(11.3, 1.7)) * 0.38;
+      float pool = smoothstep(0.50, 0.60, field);
+      float away = smoothstep(260.0, 700.0, dist) * (1.0 - smoothstep(2200.0, 3200.0, dist));
+      float level = smoothstep(0.97, 0.995, vNormal.y);
+      float glint = 0.5 + 0.5 * sin(q.x * 0.11 - q.y * 0.07 + uTime * 1.6 + vnoise(q * 0.02) * 8.0);
+      vec3 water = mix(uMid, uHorizon, 0.45) * (1.05 + 0.25 * glint);
+      col = mix(col, water, uMirage * pool * away * level);
+    }
     gl_FragColor = vec4(col, 1.0);
     #include <tonemapping_fragment>
     #include <colorspace_fragment>
@@ -400,24 +428,27 @@ export function createSky(look = LOOK) {
       ...shared(look), uWind: { value: look.wind }, uNoise: { value: getNoiseTexture() }, uTime: worldTime,
       uStars: { value: look.stars }, uStarCut: { value: look.starCut }, uCloudAmount: { value: look.clouds.amount },
       uCloudCool: { value: look.clouds.cool }, uCloudWarm: { value: look.clouds.warm },
+      uSunBand: { value: look.sunBand }, uSunDisc: { value: look.sunDisc }, uStarFrom: { value: look.starFrom },
     },
     vertexShader: 'varying vec3 vWorld; void main() { vec4 w = modelMatrix * vec4(position, 1.0); vWorld = w.xyz; vec4 p = projectionMatrix * viewMatrix * w; gl_Position = p.xyww; }',
     fragmentShader: skyFragment(look), side: THREE.BackSide, depthWrite: false, depthTest: false,
   });
   const sky = new THREE.Mesh(new THREE.SphereGeometry(1, 48, 24), material);
   sky.name = 'Sky'; sky.frustumCulled = false; sky.renderOrder = -10;
-  sky.onBeforeRender = (r, s, camera) => { sky.position.setFromMatrixPosition(camera.matrixWorld); };
+  // Follow the eye. The renderer has already updated world matrices by the time this runs, so the new position has to be pushed through
+  // by hand: otherwise the sky trails the camera by a frame, and the first frame after a teleport (a respawn, a jump to a checkpoint) is black.
+  sky.onBeforeRender = (r, s, camera) => { sky.position.setFromMatrixPosition(camera.matrixWorld); sky.updateMatrixWorld(true); };
   sky.scale.setScalar(100);
   return sky;
 }
 
-export function createSandMaterial({ detail = 1, offset = 0, floor = -16, shapeOn = false, look = LOOK, rock = look.rock } = {}) {
+export function createSandMaterial({ detail = 1, offset = 0, floor = -16, shapeOn = false, look = LOOK, rock = look.rock, mirage = 0 } = {}) {
   const material = new THREE.ShaderMaterial({
     uniforms: {
       ...shared(look), uSunColor: { value: look.sunColor }, uSand: { value: look.sand }, uShadow: { value: look.sandShadow },
       uRock: { value: rock }, uBounce: { value: look.bounce }, uFog: { value: look.fogDensity }, uFogFloor: { value: floor },
       uFogHeight: { value: look.fogHeight }, uFogEnd: { value: look.fogEnd }, uDetail: { value: detail }, uShapeOn: { value: shapeOn ? 1 : 0 },
-      uSandTex: { value: null }, uTexOn: { value: 0 },
+      uSandTex: { value: null }, uTexOn: { value: 0 }, uMirage: { value: mirage }, uTime: worldTime,
     },
     vertexShader: SAND_VERT, fragmentShader: SAND_FRAG,
   });
@@ -452,7 +483,7 @@ export async function createTerrain(course, { url, sandUrl, onStatus = () => {},
   }
   const group = new THREE.Group(); group.name = 'Terrain';
   const floor = course.plain ?? -16;
-  const nearMaterial = createSandMaterial({ detail: 1, floor, shapeOn: true, look });
+  const nearMaterial = createSandMaterial({ detail: 1, floor, shapeOn: true, look, mirage: look.mirage });
   const near = new THREE.Group(); near.name = 'Terrain near';
   for (const tile of grids.near.tiles) near.add(new THREE.Mesh(tileGeometry(tile), nearMaterial));
   if (sandUrl) {
@@ -464,7 +495,7 @@ export async function createTerrain(course, { url, sandUrl, onStatus = () => {},
       nearMaterial.uniforms.uTexOn.value = 1;
     });
   }
-  const farMaterial = createSandMaterial({ detail: 0, floor, look }); // no overlap with the fine grid any more, so no depth offset
+  const farMaterial = createSandMaterial({ detail: 0, floor, look, mirage: look.mirage }); // no overlap with the fine grid any more, so no depth offset
   const far = new THREE.Group(); far.name = 'Terrain far';
   for (const tile of grids.far.tiles) far.add(new THREE.Mesh(tileGeometry(tile), farMaterial));
   group.add(far, near);
