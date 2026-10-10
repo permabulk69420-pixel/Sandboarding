@@ -128,6 +128,10 @@ function fadeThen(action) { if (!fading) { fading = { t: 0, half: 0.18, action, 
 
 // ---------------------------------------------------------------- welcome screen, VR session
 const enterVR = document.getElementById('enter-vr');
+// Lean to steer: off unless you tick it on the start screen; remembered on this headset.
+const leanOption = document.getElementById('lean-steer');
+try { leanOption.checked = localStorage.getItem('sandboarding.lean') === '1'; } catch { /* private window */ }
+leanOption.addEventListener('change', () => { try { localStorage.setItem('sandboarding.lean', leanOption.checked ? '1' : '0'); } catch { /* ignore */ } });
 const playButton = document.getElementById('play');
 const welcome = document.getElementById('welcome');
 const hudText = document.getElementById('hud');
@@ -233,8 +237,8 @@ function frame(time) {
     if (mode === 'ride' || mode === 'finished') {
       // Intent: steer, brake, tuck (crouch for real in VR), hop.
       const loc = course.locate(board.x, board.z);
-      // Steer with the stick and by leaning your head left or right over the board; both add up.
-      const lean = session ? leanSteer(camera.position.x - headOffset.x) : 0;
+      // Steer with the stick, plus leaning your head left or right over the board if that option is on.
+      const lean = session && leanOption.checked ? leanSteer(camera.position.x - headOffset.x) : 0;
       let steer = clamp(inp.steer + lean, -1, 1), brake = inp.brake;
       if (autopilot) {
         const aim = course.pointAt(Math.min(course.length, loc.s + 14));

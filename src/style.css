@@ -13,3 +13,5 @@ button:disabled { opacity: 0.5; cursor: default; }
 #status { min-height: 1.2em; color: #9fe0ff; }
 #hud { position: fixed; left: 50%; top: 14px; transform: translateX(-50%); margin: 0; padding: 8px 16px; border-radius: 999px; background: rgba(18, 22, 28, 0.7); font-weight: 600; white-space: nowrap; }
 #hud[hidden] { display: none; }
+.option { display: inline-flex; gap: 8px; align-items: center; margin: 0 0 14px; color: #d8d0c4; cursor: pointer; }
+.option input { width: 18px; height: 18px; accent-color: #e8642c; }
