@@ -124,7 +124,6 @@ const VERTEX = /* glsl */`
     float hop = abs(sin(uTime * (1.8 + 3.2 * aSeedB.z) + aSeedB.z * 61.0));
     float rise = 0.03 + pow(aSeedA.z, 2.2) * uHeight * (0.45 + 0.55 * gust) * (1.0 + 1.3 * crest) + hop * hop * uHop;
     vec3 world = vec3(xz.x, ground + rise, xz.y);
-    vWorld = world;
 
     // The streak is a line in the world along the wind: project both of its ends, so it points the way perspective says it should,
     // then draw a quad around that line.
@@ -152,6 +151,9 @@ const VERTEX = /* glsl */`
     vec2 ndc = clipC.xy / clipC.w + vec2(offset.x / aspect, offset.y);
     gl_Position = vec4(ndc * clipC.w, clipC.z, clipC.w);
     vUv = position.xy;
+    // This corner in the world (the quad stands at the particle's depth, facing the eye), so each pixel knows how high it is above the sand.
+    vec3 cornerView = mv.xyz + vec3(offset.x / aspect * depth / projectionMatrix[0][0], offset.y * depth / projectionMatrix[1][1], 0.0);
+    vWorld = cameraPosition + transpose(mat3(viewMatrix)) * cornerView;
 
     float edge = 1.0 - smoothstep(uRadius * 0.5, uRadius, length(rel));
     float nearFade = smoothstep(uNear.x, uNear.y, depth);
@@ -165,6 +167,11 @@ const VERTEX = /* glsl */`
 
 const FRAGMENT = /* glsl */`
   uniform vec3 uSun;
+  uniform sampler2D uGroundMap;
+  uniform vec4 uGroundGrid;
+  uniform vec2 uGroundCells;
+  uniform vec2 uGroundRange;
+  uniform float uSoftGround;
   uniform float uSoft;
   uniform float uHaze;
   uniform float uBreakup;
@@ -193,6 +200,10 @@ const FRAGMENT = /* glsl */`
       float n = 0.65 * valueNoise(q * vec2(2.2, 1.4)) + 0.35 * valueNoise(q * vec2(5.5, 3.2) + 7.1);
       a *= mix(1.0, mix(0.30, 1.0, smoothstep(0.15, 0.90, n)), uBreakup);
     }
+    // Fade out toward the sand instead of being cut off by it: a hard, crawling line where a sheet meets the ground.
+    vec4 g = texture2D(uGroundMap, ((vWorld.xz - uGroundGrid.xy) / uGroundGrid.z + 0.5) / uGroundCells);
+    float groundY = dot(g.rg, vec2(256.0, 1.0)) * (255.0 / 65535.0) * uGroundRange.y + uGroundRange.x;
+    a *= smoothstep(0.0, uSoftGround, vWorld.y - groundY);
     if (a < 0.004) discard;
     vec3 ray = normalize(vWorld - cameraPosition);
     float backlit = pow(max(dot(ray, uSun), 0.0), 4.0); // dust glows when the sun is behind it
@@ -235,6 +246,7 @@ function buildLayer(name, layer, shared, center) {
       uSoft: { value: layer.soft },
       uHaze: { value: layer.haze },
       uBreakup: { value: layer.breakup ?? 0 },
+      uSoftGround: { value: Math.max(0.02, layer.width[1] * 0.6) }, // metres over which it fades into the sand
     },
     vertexShader: VERTEX, fragmentShader: FRAGMENT, transparent: true, depthWrite: false,
   });
