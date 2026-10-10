@@ -150,6 +150,8 @@ const VERTEX = /* glsl */`
 
 const FRAGMENT = /* glsl */`
   uniform vec3 uSun;
+  uniform vec3 uDust; // a tint on the sand's colour, and how brightly it is lit (the level's look)
+  uniform float uDustLight;
   varying vec2 vUv;
   varying float vAlpha;
   varying float vSeed;
@@ -178,9 +180,10 @@ const FRAGMENT = /* glsl */`
     vec3 ray = normalize(vWorld - cameraPosition);
     float backlit = pow(max(dot(ray, uSun), 0.0), 4.0);
     vec3 sand = mix(vec3(0.90, 0.72, 0.50), vec3(0.97, 0.86, 0.68), 0.5 + 0.5 * n); // paler than the ground, so it shows against it
+    sand *= uDust;
     vec3 ambient = mix(vec3(0.006, 0.009, 0.015), vec3(0.28, 0.34, 0.42), day);
     vec3 sun = vec3(1.23, 1.09, 0.86) * (0.55 + 0.9 * backlit) * day;
-    gl_FragColor = vec4(sand * (ambient + sun) * 1.05, min(1.0, a));
+    gl_FragColor = vec4(sand * (ambient + sun) * 1.05 * uDustLight, min(1.0, a));
     #include <tonemapping_fragment>
     gl_FragColor.rgb += sand * vec3(0.0060, 0.0090, 0.0165) * (1.0 - day);
     #include <colorspace_fragment>
@@ -188,7 +191,7 @@ const FRAGMENT = /* glsl */`
 `;
 
 // `sun`: the shared uSun uniform (a { value: Vector3 } of the direction to the sun, as the sand material's), `heightAt(x, z)`: the ground.
-export function createSandPuffs({ scene = null, sun, heightAt = () => 0, capacity = PUFFS.capacity } = {}) {
+export function createSandPuffs({ scene = null, sun, heightAt = () => 0, capacity = PUFFS.capacity, dust = new THREE.Vector3(1, 1, 1), dustLight = 1 } = {}) {
   if (!sun) throw new Error('Sand puffs need the sun uniform.');
   const sim = createPuffSim({ capacity, heightAt });
   const geometry = new THREE.InstancedBufferGeometry();
@@ -202,7 +205,7 @@ export function createSandPuffs({ scene = null, sun, heightAt = () => 0, capacit
   geometry.setAttribute('aLook', look);
   geometry.instanceCount = 0;
   const material = new THREE.ShaderMaterial({
-    uniforms: { uSun: sun, uNear: { value: new THREE.Vector2(...PUFFS.nearFade) } },
+    uniforms: { uSun: sun, uNear: { value: new THREE.Vector2(...PUFFS.nearFade) }, uDust: { value: dust }, uDustLight: { value: dustLight } },
     vertexShader: VERTEX,
     fragmentShader: FRAGMENT,
     transparent: true,

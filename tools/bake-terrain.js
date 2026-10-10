@@ -1,13 +1,14 @@
 // Works out every terrain vertex height once, at build time, so the headset doesn't spend seconds on it at load.
 // Runs automatically before `npm run dev` and `npm run build`. Output: public/terrain/<course id>.bin (Float32, coarse grid then fine),
-// one per course in src/courses/index.js.
+// one per course in src/courses/index.js. `npm run bake <id>` bakes just that course.
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { createCourse } from '../src/course.js';
 import { COURSES } from '../src/courses/index.js';
 import { buildTerrainGrids } from '../src/terrain-grid.js';
 
 mkdirSync(new URL('../public/terrain/', import.meta.url), { recursive: true });
-for (const def of COURSES) {
+const ids = process.argv.slice(2);
+for (const def of ids.length ? COURSES.filter(c => ids.includes(c.id)) : COURSES) {
   const t0 = performance.now();
   const course = createCourse(def);
   const { near, far } = buildTerrainGrids(course);

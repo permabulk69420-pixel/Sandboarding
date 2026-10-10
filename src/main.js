@@ -4,7 +4,7 @@ import { createCourse } from './course.js';
 import { COURSES, courseById } from './courses/index.js';
 import { createBoardState, stepBoard, speedOf, leanSteer, boardAttitude, BOARD, useFeel } from './board.js';
 import { clamp, angleDelta } from './math.js';
-import { createSky, createTerrain, createSandMaterial, LOOK, worldTime } from './world.js';
+import { createSky, createTerrain, createSandMaterial, makeLook, worldTime } from './world.js';
 import { createLandmarks } from './landmarks.js';
 import { createWindSand, WIND_SAND } from './wind-sand.js';
 import { createGate, createLaneFlags, createBoardMesh, loadBoardModel } from './props.js';
@@ -45,30 +45,33 @@ const rig = new THREE.Group(); rig.name = 'Player rig';
 rig.add(camera); scene.add(rig);
 camera.position.set(0, RUN.eye, 0);
 
-scene.add(createSky());
+// Which run: ?run=<id> (the start screen's list picks it). Defaults to the first. Each run brings its own look: sky, sun, sand, haze.
+const courseDef = courseById(params.get('run'));
+const runNumber = COURSES.indexOf(courseDef) + 1;
+const look = makeLook(courseDef.look);
+renderer.toneMappingExposure = look.exposure;
+
+scene.add(createSky(look));
 // Reflections for the shiny things (the board's clearcoat and titanium, the gates): the sky, captured once into an environment map.
 {
-  const envScene = new THREE.Scene(); envScene.add(createSky());
+  const envScene = new THREE.Scene(); envScene.add(createSky(look));
   const pmrem = new THREE.PMREMGenerator(renderer);
   scene.environment = pmrem.fromScene(envScene, 0, 0.1, 100).texture;
   pmrem.dispose();
 }
-scene.add(new THREE.HemisphereLight(new THREE.Color().copy(LOOK.mid).lerp(LOOK.zenith, 0.3), LOOK.bounce, 1.1));
-const sunLight = new THREE.DirectionalLight(new THREE.Color(LOOK.sunColor).multiplyScalar(0.45), 2.2);
-sunLight.position.copy(LOOK.sun).multiplyScalar(100); scene.add(sunLight);
+scene.add(new THREE.HemisphereLight(new THREE.Color().copy(look.mid).lerp(look.zenith, 0.3), look.bounce, 1.1));
+const sunLight = new THREE.DirectionalLight(new THREE.Color(look.sunColor).multiplyScalar(0.45), 2.2);
+sunLight.position.copy(look.sun).multiplyScalar(100); scene.add(sunLight);
 
-// Which run: ?run=<id> (the lodge's map table will choose later). Defaults to the first.
-const courseDef = courseById(params.get('run'));
-const runNumber = COURSES.indexOf(courseDef) + 1;
 const course = createCourse(courseDef);
 const status = document.getElementById('status');
-const sunUniform = { value: LOOK.sun };
+const sunUniform = { value: look.sun };
 let windSand = null; // blowing sand, once the ground has loaded
 const BUILD = typeof __BUILD_ID__ !== 'undefined' ? __BUILD_ID__ : 'dev';
-createTerrain(course, { url: `${BASE}terrain/${course.id}.bin?v=${BUILD}`, sandUrl: `${BASE}textures/sand-detail.jpg`, onStatus: t => { status.textContent = t; } }).then(terrain => {
+createTerrain(course, { url: `${BASE}terrain/${course.id}.bin?v=${BUILD}`, sandUrl: `${BASE}textures/sand-detail.jpg`, look, onStatus: t => { status.textContent = t; } }).then(terrain => {
   scene.add(terrain); status.textContent = ''; enterVR.disabled = !xrSupported; playButton.disabled = false;
-  if (course.landmarks.length && !params.has('nolandmarks')) scene.add(createLandmarks(course, course.landmarks, createSandMaterial({ detail: 1, floor: course.plain, rock: LOOK.sandstone })));
-  if (terrain.userData.ground && !params.has('nowind')) windSand = createWindSand({ scene, lattice: terrain.userData.ground, sun: sunUniform });
+  if (course.landmarks.length && !params.has('nolandmarks')) scene.add(createLandmarks(course, course.landmarks, createSandMaterial({ detail: 1, floor: course.plain, rock: look.sandstone, look })));
+  if (terrain.userData.ground && !params.has('nowind')) windSand = createWindSand({ scene, lattice: terrain.userData.ground, sun: sunUniform, wind: look.wind, dust: look.dust, dustLight: look.dustLight });
   enterVR.textContent = xrSupported ? 'Enter VR' : 'VR not available';
 });
 scene.add(createGate(course, course.startS, 'START', { bg: '#2f7fd8' }));
@@ -83,7 +86,7 @@ if (!params.has('nolodge')) {
   import('./lodge-test.js').then(m => m.placeLodge({ scene, course, url: `${BASE}models/lodge/cabin-loft.glb` }))
     .then(l => { lodge = l; if (mode === 'summit') placeOnSummit(); }).catch(error => console.warn('lodge', error));
 }
-const puffs = createSandPuffs({ scene, sun: sunUniform, heightAt: course.heightAt });
+const puffs = createSandPuffs({ scene, sun: sunUniform, heightAt: course.heightAt, dust: look.dust, dustLight: look.dustLight });
 const audio = createRideAudio();
 const input = createInput();
 const hands = createVRHands({ renderer, scene, parent: rig });
@@ -115,6 +118,7 @@ let charge = 0, chargeClock = 0, crouched = false, crouchAmount = 0; // the jump
 let dip = 0; // the little duck while winding up a jump, eased
 let fading = null; // { t, half, action }
 const autopilot = params.has('auto');
+const frozenTime = params.has('time') ? Number(params.get('time')) || 0 : null; // ?time=<seconds>: stop the sky's clock, for repeatable screenshots
 
 const groundAt = (x, z) => lodge?.floorAt(x, z) ?? course.heightAt(x, z); // on foot: the cabin's floor where there is one
 
@@ -157,6 +161,20 @@ function fadeThen(action) { if (!fading) { fading = { t: 0, half: 0.18, action, 
 // ---------------------------------------------------------------- welcome screen, VR session
 const enterVR = document.getElementById('enter-vr');
 document.querySelector('#welcome .tag').textContent = `Run ${runNumber} · ${course.name}`;
+// The run picker: a card per run, the one you are on marked. Picking one reloads the page on it (each run has its own ground and look).
+const runList = document.getElementById('runs');
+if (COURSES.length > 1) {
+  COURSES.forEach((def, i) => {
+    const card = document.createElement('a');
+    card.className = def === courseDef ? 'run current' : 'run';
+    card.href = `?run=${def.id}`;
+    if (def === courseDef) card.setAttribute('aria-current', 'page');
+    const title = document.createElement('b'), blurb = document.createElement('span');
+    title.textContent = `${i + 1} · ${def.name}`; blurb.textContent = def.blurb || '';
+    card.append(title, blurb);
+    runList.append(card);
+  });
+}
 // Lean to steer: off unless you tick it on the start screen; remembered on this headset.
 const leanOption = document.getElementById('lean-steer');
 try { leanOption.checked = localStorage.getItem('sandboarding.lean') === '1'; } catch { /* private window */ }
@@ -393,7 +411,7 @@ function frame(time) {
   hands.update(dt);
   grab.place();
   puffs.update(dt);
-  worldTime.value = (time / 1000) % 3600;
+  worldTime.value = frozenTime ?? (time / 1000) % 3600;
   if (windSand) { camera.getWorldPosition(headWorld); windSand.update(time / 1000, headWorld, session ? WIND_SAND.vrViewHeight : renderer.domElement.height); }
   renderer.render(scene, camera);
 }
