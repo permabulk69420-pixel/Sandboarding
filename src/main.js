@@ -4,7 +4,7 @@ import { createCourse } from './course.js';
 import { createBoardState, stepBoard, speedOf, BOARD } from './board.js';
 import { clamp, angleDelta } from './math.js';
 import { createSky, createTerrain, LOOK } from './world.js';
-import { createGate, createLaneFlags, createBoardMesh } from './props.js';
+import { createGate, createLaneFlags, createBoardMesh, loadBoardModel } from './props.js';
 import { createWristPanel, createSign, formatTime } from './hud.js';
 import { createRideAudio } from './audio.js';
 import { createInput } from './input.js';
@@ -38,6 +38,13 @@ rig.add(camera); scene.add(rig);
 camera.position.set(0, RUN.eye, 0);
 
 scene.add(createSky());
+// Reflections for the shiny things (the board's clearcoat and titanium, the gates): the sky, captured once into an environment map.
+{
+  const envScene = new THREE.Scene(); envScene.add(createSky());
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  scene.environment = pmrem.fromScene(envScene, 0, 0.1, 100).texture;
+  pmrem.dispose();
+}
 scene.add(new THREE.HemisphereLight(new THREE.Color().copy(LOOK.mid).lerp(LOOK.zenith, 0.3), LOOK.bounce, 1.1));
 const sunLight = new THREE.DirectionalLight(new THREE.Color(LOOK.sunColor).multiplyScalar(0.45), 2.2);
 sunLight.position.copy(LOOK.sun).multiplyScalar(100); scene.add(sunLight);
@@ -53,6 +60,7 @@ scene.add(createGate(course, course.finishS, 'FINISH', { bg: '#e8642c' }));
 scene.add(createLaneFlags(course));
 
 const boardMesh = createBoardMesh(); scene.add(boardMesh);
+loadBoardModel(boardMesh, `${BASE}models/board/sirocco_dune156.glb`);
 const puffs = createSandPuffs({ scene, sun: { value: LOOK.sun }, heightAt: course.heightAt });
 const audio = createRideAudio();
 const input = createInput();

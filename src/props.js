@@ -1,6 +1,8 @@
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
-// Placeholder props until Kane's models arrive: start and finish gates, flags along the lane edges, and the board.
+// Props: start and finish gates, flags along the lane edges (placeholders), and the board, which starts as a simple placeholder and is
+// swapped for the Sirocco / Dune 156 model as soon as that loads.
 // Everything here is simple geometry and one or two materials, instanced where there are many.
 
 function bannerTexture(text, { bg = '#e8642c', fg = '#fff4e2' } = {}) {
@@ -97,4 +99,16 @@ export function createBoardMesh() {
     strap.position.set(0, 0.045, z); board.add(strap);
   }
   return board;
+}
+
+// Swap the placeholder for a real board model once it has loaded. The model's origin is the board's centre, nose along -z, +y up, as
+// the placeholder's. Keeps the placeholder if loading fails.
+export function loadBoardModel(board, url, { onError = console.warn } = {}) {
+  new GLTFLoader().load(url, gltf => {
+    const model = gltf.scene;
+    model.name = 'Board model';
+    model.traverse(o => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = false; } });
+    board.clear();
+    board.add(model);
+  }, undefined, error => onError(`Board model failed to load: ${error?.message || error}`));
 }
