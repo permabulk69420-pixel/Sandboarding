@@ -2,9 +2,10 @@ import * as THREE from 'three';
 import { setHeldGripProfile, clearHeldGripProfile, GRIP_PROFILE } from './grip-poses.js';
 import { attachHeldObject, setGripSurface } from './grip-contact.js';
 
-// (From Oasis, with one addition for Sandboarding: a handle can say which way is `inward`, and the hand is then turned about the handle so
-// its palm faces that way. A board's edge is held like that, palm toward the middle of the deck, so the deck runs out between thumb and
-// fingers instead of through the wrist.)
+// (From Oasis, with one addition for Sandboarding: an edge. A handle can be a `plate` ({ thickness, width }) instead of a bar, with an
+// `inward` direction: the edge of a flat thing, like a board's. The invisible shape in the hand is then a plate that thick, running out of
+// the palm, so the fingers close onto one face and the thumb onto the other, the way you hold a table's edge; and the hand is turned about
+// the edge so the plate runs off inward, along the real board.)
 //
 // Holding a handle that belongs to something else: the sand kart's handlebar, the glider's bar, any handle to come. One rule for all of them, so a new
 // handle needs no fitting by hand: the hollow of the closed hand goes on the handle's axis.
@@ -63,7 +64,45 @@ export function createHandleHold() {
   const nq = new THREE.Quaternion(), align = new THREE.Quaternion(), ps = new THREE.Vector3(), handleQ = new THREE.Quaternion();
   const inward = new THREE.Vector3(), palm = new THREE.Vector3(), anchorQ = new THREE.Quaternion(), roll = new THREE.Quaternion(), cross = new THREE.Vector3();
   const scratchP = new THREE.Vector3(), scratchS = new THREE.Vector3();
-  const PALM = new THREE.Vector3(0, -1, 0); // the hand models face their palms along -y (src/hands.js)
+  const wrist = new THREE.Vector3(), knuckleA = new THREE.Vector3(), knuckleB = new THREE.Vector3(), tip = new THREE.Vector3(), toAnchor = new THREE.Matrix4();
+
+  // Which way the palm faces, in the hand anchor's own space, measured from the posed hand: square to the plane through the wrist and the
+  // index and pinky knuckles, on the side the fingers curl toward. (Measured, not assumed: the rig's bones carry their own rotations.)
+  function palmInAnchor(state, out) {
+    const side = state.handedness === 'left' ? 'l' : 'r', root = state.handRoot;
+    const bones = ['hand', 'index1', 'pinky1', 'middle_ignore'].map(n => root?.getObjectByName(`b_${side}_${n}`));
+    if (bones.some(b => !b)) return out.set(0, -1, 0);
+    toAnchor.copy(state.handAnchor.matrixWorld).invert();
+    const at = (bone, v) => bone.getWorldPosition(v).applyMatrix4(toAnchor);
+    at(bones[0], wrist); at(bones[1], knuckleA); at(bones[2], knuckleB); at(bones[3], tip);
+    out.crossVectors(knuckleA.sub(wrist), knuckleB.sub(wrist)).normalize();
+    if (out.dot(tip.sub(wrist)) < 0) out.negate();
+    return out;
+  }
+  const palmLocal = new THREE.Vector3();
+
+  // The plate for an edge, in the hand's object frame (the grip socket's): along the edge (y) a hand's width, out of the palm (along the
+  // palm's own normal, which the grip solver will also push it along) `width`, and `thickness` across. Its origin is on the edge.
+  const plateOut = new THREE.Vector3();
+  function plate(state, { thickness = 0.016, width = 0.1 } = {}) {
+    // the palm normal, as the grip solver measures it: (0, -1, 0) in the hand rig, seen from the object frame
+    state.handRoot.updateWorldMatrix(true, true); state.objectGrip.updateWorldMatrix(true, false);
+    const qRoot = new THREE.Quaternion(), qGrip = new THREE.Quaternion();
+    state.handRoot.getWorldQuaternion(qRoot); state.objectGrip.getWorldQuaternion(qGrip);
+    const out = new THREE.Vector3(0, -1, 0).applyQuaternion(qRoot).applyQuaternion(qGrip.invert());
+    out.y = 0; out.normalize(); // square to the edge (local y)
+    const across = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), out);
+    const geometry = new THREE.BoxGeometry(width, HANDLE_HOLD.barLength, thickness);
+    // box: x = out, y = along, z = across; then move it so it starts at the origin and runs outward
+    geometry.translate(width / 2, 0, 0);
+    geometry.applyMatrix4(new THREE.Matrix4().makeBasis(out, new THREE.Vector3(0, 1, 0), across));
+    const mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false }));
+    mesh.name = 'Handle hold plate';
+    mesh.userData.handleHold = true;
+    mesh.userData.plateOut = out.toArray();
+    setGripSurface(mesh, { axis: [0, 1, 0], point: [0, 0, 0], halfLength: HANDLE_HOLD.barLength / 2 });
+    return mesh;
+  }
 
   function bar(radius, big = false) {
     const mesh = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, HANDLE_HOLD.barLength, 16),
@@ -87,10 +126,10 @@ export function createHandleHold() {
     if (holds.has(state)) { holds.get(state).handle = handle; return true; }
     if (state.objectGrip.children.length) return false;
     const radius = THREE.MathUtils.clamp(handle.radius ?? 0.02, HANDLE_HOLD.minRadius, handle.maxRadius ?? HANDLE_HOLD.maxRadius);
-    const b = bar(radius, radius > HANDLE_HOLD.maxRadius);
+    const b = handle.plate ? plate(state, handle.plate) : bar(radius, radius > HANDLE_HOLD.maxRadius);
     if (!attachHeldObject(state, b)) return false;
     holds.set(state, { home: { position: state.handAnchor.position.clone(), quaternion: state.handAnchor.quaternion.clone() }, bar: b, handle });
-    setHeldGripProfile(state, radius < 0.017 ? GRIP_PROFILE.THIN : radius > 0.026 ? GRIP_PROFILE.LARGE : GRIP_PROFILE.MEDIUM);
+    setHeldGripProfile(state, handle.plate ? GRIP_PROFILE.MEDIUM : radius < 0.017 ? GRIP_PROFILE.THIN : radius > 0.026 ? GRIP_PROFILE.LARGE : GRIP_PROFILE.MEDIUM);
     return true;
   }
 
@@ -133,9 +172,9 @@ export function createHandleHold() {
     want.compose(p, nq, s);
     mat.copy(barInAnchor).invert();
     if (hold.handle.inward) {
-      // Turn the hand about the handle until its palm (as near as it can, square to the handle) faces inward.
-      want.multiply(mat).decompose(scratchP, anchorQ, scratchS);
-      palm.copy(PALM).applyQuaternion(anchorQ);
+      // Turn the hand about the handle until the plate runs off inward (for a bar: until the palm, as measured, faces inward).
+      if (hold.bar.userData.plateOut) palm.fromArray(hold.bar.userData.plateOut).applyQuaternion(nq);
+      else { palmInAnchor(state, palmLocal); want.multiply(mat).decompose(scratchP, anchorQ, scratchS); palm.copy(palmLocal).applyQuaternion(anchorQ); }
       palm.addScaledVector(axis, -palm.dot(axis));
       inward.fromArray(hold.handle.inward).applyQuaternion(handleQ);
       inward.addScaledVector(axis, -inward.dot(axis));

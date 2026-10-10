@@ -18,7 +18,7 @@ export const GRAB = Object.freeze({
   follow: 16, // per second: how quickly the board comes up (and settles back when you let go)
   noseFrom: 0.4, // metres from the middle along the board past which a grab is the nose or tail
   between: 0.17, // side grabs sit between the bindings, within this of the middle
-  edgeRadius: 0.012, // the edge is held like the thinnest handle
+  plate: Object.freeze({ thickness: 0.016, width: 0.1 }), // the edge is held as a plate this thick (the deck), the fingers on one face
 });
 
 const names = {
@@ -38,17 +38,19 @@ function outline(boardMesh) {
   const pos = deck.geometry.attributes.position, v = new THREE.Vector3(), pts = [];
   for (let i = 0; i < pos.count; i += 1) pts.push(v.fromBufferAttribute(pos, i).applyMatrix4(toBoard).clone());
   return {
-    // the side edge at z: its outermost point that way
+    // the side edge at z: its outermost point that way, halfway up the deck's thickness there
     side(sign, z) {
-      let best = null;
-      for (const p of pts) if (Math.abs(p.z - z) < 0.015 && (!best || p.x * sign > best.x * sign)) best = p;
-      return best ? best.clone() : new THREE.Vector3(sign * 0.15, 0.03, z);
+      const near = pts.filter(p => Math.abs(p.z - z) < 0.015);
+      if (!near.length) return new THREE.Vector3(sign * 0.15, 0.03, z);
+      const out = Math.max(...near.map(p => p.x * sign)), rim = near.filter(p => p.x * sign > out - 0.006);
+      return new THREE.Vector3(sign * out, (Math.min(...rim.map(p => p.y)) + Math.max(...rim.map(p => p.y))) / 2, z);
     },
-    // the very tip at x (sign -1: the nose, +1: the tail)
+    // the very tip at x (sign -1: the nose, +1: the tail), halfway up its thickness
     tip(sign, x) {
-      let best = null;
-      for (const p of pts) if (Math.abs(p.x - x) < 0.02 && (!best || p.z * sign > best.z * sign)) best = p;
-      return best ? best.clone() : new THREE.Vector3(x, 0.05, sign * 0.78);
+      const near = pts.filter(p => Math.abs(p.x - x) < 0.02);
+      if (!near.length) return new THREE.Vector3(x, 0.05, sign * 0.78);
+      const out = Math.max(...near.map(p => p.z * sign)), rim = near.filter(p => p.z * sign > out - 0.006);
+      return new THREE.Vector3(x, (Math.min(...rim.map(p => p.y)) + Math.max(...rim.map(p => p.y))) / 2, sign * out);
     },
   };
 }
@@ -88,8 +90,8 @@ export function createBoardGrab({ hands, boardMesh }) {
     marker.updateMatrixWorld(true);
     marker.getWorldPosition(mark);
     if (mark.distanceTo(socket) > GRAB.maxLift + GRAB.reach) { marker.removeFromParent(); return false; }
-    if (!hold.grab(state, { node: marker, axis, halfLength: 0, radius: GRAB.edgeRadius, inward })) { marker.removeFromParent(); return false; }
-    grabs.set(state, { part, name: names[part](state.handedness), marker, time: 0 });
+    if (!hold.grab(state, { node: marker, axis, halfLength: 0, plate: GRAB.plate, inward })) { marker.removeFromParent(); return false; }
+    grabs.set(state, { part, name: names[part](state.handedness), marker, time: 0, inward });
     pulseHaptics(state, 0.5, 45);
     return true;
   }
@@ -135,5 +137,11 @@ export function createBoardGrab({ hands, boardMesh }) {
     place() { for (const state of grabs.keys()) hold.place(state); },
     releaseAll() { for (const state of [...grabs.keys()]) stop(state); },
     clearLog() { log.length = 0; },
+    // dev: each grab with the inward direction it asked for, in the world
+    debug() {
+      const m = new Map(), q = new THREE.Quaternion();
+      for (const [state, g] of grabs) { g.marker.getWorldQuaternion(q); m.set(state, { name: g.name, inwardWorld: new THREE.Vector3().fromArray(g.inward).applyQuaternion(q) }); }
+      return m;
+    },
   };
 }
