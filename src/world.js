@@ -387,7 +387,10 @@ export async function createTerrain(course, { url, sandUrl, onStatus = () => {} 
   }
   if (!baked) onStatus('Shaping the mountain (this takes a few seconds)…');
   let grids;
-  try { grids = buildTerrainGrids(course, baked); } catch (error) { console.warn(error); grids = buildTerrainGrids(course); }
+  try { grids = buildTerrainGrids(course, baked); } catch (error) {
+    console.warn(error); onStatus('Shaping the mountain (this takes a few seconds)…'); // an out-of-date terrain file: work it out live (slow)
+    grids = buildTerrainGrids(course);
+  }
   const group = new THREE.Group(); group.name = 'Terrain';
   const floor = course.plain ?? -16;
   const nearMaterial = createSandMaterial({ detail: 1, floor });

@@ -63,7 +63,8 @@ const course = createCourse(courseDef);
 const status = document.getElementById('status');
 const sunUniform = { value: LOOK.sun };
 let windSand = null; // blowing sand, once the ground has loaded
-createTerrain(course, { url: `${BASE}terrain/${course.id}.bin`, sandUrl: `${BASE}textures/sand-detail.jpg`, onStatus: t => { status.textContent = t; } }).then(terrain => {
+const BUILD = typeof __BUILD_ID__ !== 'undefined' ? __BUILD_ID__ : 'dev';
+createTerrain(course, { url: `${BASE}terrain/${course.id}.bin?v=${BUILD}`, sandUrl: `${BASE}textures/sand-detail.jpg`, onStatus: t => { status.textContent = t; } }).then(terrain => {
   scene.add(terrain); status.textContent = ''; enterVR.disabled = !xrSupported; playButton.disabled = false;
   if (terrain.userData.ground && !params.has('nowind')) windSand = createWindSand({ scene, lattice: terrain.userData.ground, sun: sunUniform });
   enterVR.textContent = xrSupported ? 'Enter VR' : 'VR not available';
