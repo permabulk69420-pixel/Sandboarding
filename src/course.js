@@ -126,7 +126,7 @@ export function createCourse(def = COURSES[0]) {
   for (let i = 0; i < n; i += 1) {
     let sum = 0, c = 0; // 41 m box smoothing so banks build and fade gently
     for (let j = i - 20; j <= i + 20; j += 1) if (j >= 0 && j < n) { sum += rawK[j]; c += 1; }
-    B[i] = clamp((sum / c) * 26, -0.32, 0.32); // rise of the outside of a turn, per metre across the lane
+    B[i] = clamp((sum / c) * 34, -0.42, 0.42); // rise of the outside of a turn, per metre across the lane: berms you can lean into
     E[i] = elevation(i); W[i] = halfWidth(i); KL[i] = 6;
     for (const r of rollers) if (i >= r.from && i <= r.to) {
       R[i] += r.height * Math.sin(((i - r.from) / r.wavelength) * Math.PI * 2) * smooth(r.from, r.from + 12, i) * (1 - smooth(r.to - 12, r.to, i));
@@ -193,7 +193,7 @@ export function createCourse(def = COURSES[0]) {
     let h = mix(E[i], E[j], t) + dish * inLane * inLane + mix(B[i], B[j], t) * clamp(cross, -bankReach, bankReach);
     const roll = mix(R[i], R[j], t), kick = mix(K[i], K[j], t);
     if (roll !== 0) h += roll * (1 - smooth(w - 5, w, ad));
-    if (kick !== 0) { const lane = Math.max(KL[i], KL[j]); h += kick * (1 - smooth(lane, lane + 3, ad)); }
+    if (kick !== 0) { const lane = Math.max(KL[i], KL[j]); h += kick * (1 - smooth(lane, lane + 1.8, ad)); } // built sides: a short, sharp fall-off
     const s = i + t;
     for (let q = 0; q < sideHits.length; q += 1) {
       const sh = sideHits[q];

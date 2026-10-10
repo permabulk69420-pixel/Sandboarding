@@ -236,11 +236,14 @@ const SKY_FRAG = /* glsl */`
 `;
 
 const SAND_VERT = /* glsl */`
-  varying vec3 vWorld; varying vec3 vNormal;
+  attribute vec2 shape; // metres past the lane's edge, and how far the point stands above its neighbours (near ground only)
+  uniform float uShapeOn;
+  varying vec3 vWorld; varying vec3 vNormal; varying vec2 vShape;
   #include <logdepthbuf_pars_vertex>
   void main() {
     vec4 w = modelMatrix * vec4(position, 1.0);
     vWorld = w.xyz; vNormal = normalize(mat3(modelMatrix) * normal);
+    vShape = uShapeOn > 0.5 ? shape : vec2(100.0, 0.0); // the far ground is all wild dunes
     gl_Position = projectionMatrix * viewMatrix * w;
     #include <logdepthbuf_vertex>
   }
@@ -249,6 +252,7 @@ const SAND_VERT = /* glsl */`
 const SAND_FRAG = /* glsl */`
   uniform vec3 uSun, uSunColor, uSand, uShadow, uRock, uBounce, uZenith, uMid, uHorizon, uGlow;
   uniform float uFog, uFogFloor, uFogHeight, uFogEnd, uDetail, uTexOn;
+  varying vec2 vShape;
   uniform sampler2D uSandTex; // ripple normal in red/green, brightness detail in blue (ambientCG Ground098, CC0)
   varying vec3 vWorld; varying vec3 vNormal;
   #include <logdepthbuf_pars_fragment>
@@ -262,6 +266,11 @@ const SAND_FRAG = /* glsl */`
     vec3 V = toEye / dist;
     vec2 q = vWorld.xz;
     float steep = smoothstep(0.42, 0.62, 1.0 - N.y);
+    // The run: inside the lane (and a couple of metres up its walls) the sand is groomed and packed by riders: smoother and a touch
+    // lighter than the wild dunes either side, so the line you ride always reads. Crests and lips (anything standing proud of the sand
+    // round it) are scoured pale by the wind; hollows hold darker sand. That's what makes a kicker's lip or a roller's top stand out.
+    float lane = 1.0 - smoothstep(-2.0, 4.0, vShape.x);
+    float crest = smoothstep(0.02, 0.22, vShape.y), hollow = smoothstep(0.03, 0.3, -vShape.y);
 
     // Up close, real sand: a photographed wind-rippled sand texture, its crests turned to face the wind. Two samples at different sizes and
     // angles, swapped by a slow noise, so the tiling never lines up. It fades out with distance (and before the texture has loaded).
@@ -276,7 +285,7 @@ const SAND_FRAG = /* glsl */`
       vec2 nxy = t.rg * 2.0 - 1.0;
       vec3 T = normalize(vec3(U.x, 0.0, U.y) - N * dot(vec3(U.x, 0.0, U.y), N));
       vec3 B = normalize(vec3(W.x, 0.0, W.y) - N * dot(vec3(W.x, 0.0, W.y), N));
-      N = normalize(N + (T * nxy.x + B * nxy.y) * tex);
+      N = normalize(N + (T * nxy.x + B * nxy.y) * tex * mix(1.0, 0.45, max(lane, crest))); // packed sand: softer ripples
       grain = mix(1.0, t.b * 2.0, tex);
     }
 
@@ -288,7 +297,7 @@ const SAND_FRAG = /* glsl */`
     near *= 1.0 - smoothstep(0.9, 1.6, fwidth(phBase)); // radians of ripple per pixel: 6.28 / 4 pixels is about 1.6
     if (near > 0.0) {
       float ph = phBase + vnoise(q * 0.27) * 6.0 + vnoise(q * 1.9) * 0.9;
-      float slope = cos(ph) * 0.11 * near * (0.6 + 0.4 * vnoise(q * 0.08));
+      float slope = cos(ph) * 0.11 * near * (0.6 + 0.4 * vnoise(q * 0.08)) * mix(1.0, 0.35, max(lane, crest));
       N = normalize(N + vec3(0.82, 0.0, 0.57) * slope);
     }
 
@@ -297,6 +306,7 @@ const SAND_FRAG = /* glsl */`
     vec3 albedo = mix(uSand * 0.86, uSand * 1.08, drift);
     albedo *= mix(1.0, 0.94 + 0.12 * vnoise(q * 2.3), uDetail); // fine grain up close; its average far away, so near and far match
     albedo *= grain;
+    albedo *= 1.0 + 0.06 * lane + 0.2 * crest - 0.1 * hollow;
     float strata = 0.85 + 0.15 * sin(vWorld.y * 1.3 + vnoise(q * 0.05) * 3.0);
     albedo = mix(albedo, uRock * strata, steep);
 
@@ -353,12 +363,12 @@ export function createSky() {
   return sky;
 }
 
-export function createSandMaterial({ detail = 1, offset = 0, floor = -16 } = {}) {
+export function createSandMaterial({ detail = 1, offset = 0, floor = -16, shapeOn = false } = {}) {
   const material = new THREE.ShaderMaterial({
     uniforms: {
       ...shared(), uSunColor: { value: LOOK.sunColor }, uSand: { value: LOOK.sand }, uShadow: { value: LOOK.sandShadow },
       uRock: { value: LOOK.rock }, uBounce: { value: LOOK.bounce }, uFog: { value: LOOK.fogDensity }, uFogFloor: { value: floor },
-      uFogHeight: { value: LOOK.fogHeight }, uFogEnd: { value: LOOK.fogEnd }, uDetail: { value: detail },
+      uFogHeight: { value: LOOK.fogHeight }, uFogEnd: { value: LOOK.fogEnd }, uDetail: { value: detail }, uShapeOn: { value: shapeOn ? 1 : 0 },
       uSandTex: { value: null }, uTexOn: { value: 0 },
     },
     vertexShader: SAND_VERT, fragmentShader: SAND_FRAG,
@@ -371,6 +381,7 @@ function tileGeometry(tile) {
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.BufferAttribute(tile.positions, 3));
   geometry.setAttribute('normal', new THREE.BufferAttribute(tile.normals, 3));
+  if (tile.shapes) geometry.setAttribute('shape', new THREE.BufferAttribute(tile.shapes, 2));
   geometry.setIndex(new THREE.BufferAttribute(tile.indices, 1));
   geometry.computeBoundingSphere(); // per tile, so tiles out of view are skipped
   return geometry;
@@ -393,7 +404,7 @@ export async function createTerrain(course, { url, sandUrl, onStatus = () => {} 
   }
   const group = new THREE.Group(); group.name = 'Terrain';
   const floor = course.plain ?? -16;
-  const nearMaterial = createSandMaterial({ detail: 1, floor });
+  const nearMaterial = createSandMaterial({ detail: 1, floor, shapeOn: true });
   const near = new THREE.Group(); near.name = 'Terrain near';
   for (const tile of grids.near.tiles) near.add(new THREE.Mesh(tileGeometry(tile), nearMaterial));
   if (sandUrl) {

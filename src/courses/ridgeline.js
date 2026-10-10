@@ -44,8 +44,11 @@ const ROLLERS = [
 // A kicker's ramp curves up (shape exponent) so its lip points skyward; beyond the lip a landing slope eases back down to the run.
 // `lane` is the half width of the kicker; the lane goes on past either side of it if you'd rather not jump.
 const KICKERS = [
-  { at: 517, length: 12, height: 2.3, drop: 10, lane: 6, curve: 2.2 },
-  { at: 716, length: 14, height: 2.6, drop: 12, lane: 7, curve: 2.2 },
+  // The jump line on the steep pitch: three built kickers a hundred metres apart, each a steep-faced ramp with a crisp lip and a long
+  // landing, narrow enough to ride round.
+  { at: 517, length: 13, height: 3.1, drop: 16, lane: 5, curve: 2.6 },
+  { at: 616, length: 13, height: 3.1, drop: 16, lane: 5, curve: 2.6 },
+  { at: 716, length: 15, height: 3.5, drop: 18, lane: 5.5, curve: 2.6 },
   { at: 1452, length: 24, height: 4.6, drop: 75, lane: 9, curve: 2.3 }, // big jump one: a long landing as steep as you fall, enough air to flip
   { at: 2182, length: 20, height: 3.4, drop: 6, lane: 10, curve: 2.6 }, // the gap jump's takeoff: over a gap in nearly level ground onto a long 27 degree landing
 ];
@@ -53,7 +56,7 @@ const KICKERS = [
 // falling away under it), so coming up short costs you speed but never traps you.
 const GAPS = [{ from: 2186, to: 2216, depth: 4.5, bottom: 0.3, lane: 10 }];
 // Side hits: small kickers off to one side of the lane (offset in metres, + right of travel), something to pop off on the long stretches.
-const SIDE_HIT = { length: 9, height: 1.4, drop: 6, lane: 3, curve: 2.0 };
+const SIDE_HIT = { length: 10, height: 1.9, drop: 8, lane: 3.2, curve: 2.4 };
 const SIDE_HITS = [
   [205, 8], [285, -8], // the cruisy first pitch
   [960, 22], [1030, -18], [1095, 15], [1185, -25], // the bowl

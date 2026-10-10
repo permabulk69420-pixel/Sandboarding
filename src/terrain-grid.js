@@ -107,7 +107,7 @@ function buildGrid(course, { step, x0, z0, cols, rows, keepQuad, heights, tile =
 // The near grid: 2.5 m squares, split into 1.25 m ones over the lane and the foot of its walls. Where a big square meets split ones its
 // edge has an extra vertex in the middle, so it is drawn as a fan from its centre to keep the surface closed (no cracks). Built on a
 // 1.25 m lattice; only the points some triangle uses get a height. Same outputs as buildGrid.
-function buildNearGrid(course, { x0, z0, bcols, brows, keepBlock, fineBlock, heights, tile }) {
+function buildNearGrid(course, { x0, z0, bcols, brows, keepBlock, fineBlock, beyondAt, heights, tile }) {
   const S = GRID.laneSplit, step = GRID.nearStep / S;
   const cols = bcols * S + 1, rows = brows * S + 1, n = cols * rows;
   const keep = new Uint8Array(bcols * brows), fine = new Uint8Array(bcols * brows);
@@ -173,6 +173,17 @@ function buildNearGrid(course, { x0, z0, bcols, brows, keepBlock, fineBlock, hei
     const nx = -(y[xb] - y[xa]) / (((da + db) || 1) * step), nz = -(y[zb] - y[za]) / (((ea + eb) || 1) * step), l = Math.hypot(nx, 1, nz);
     nrm[i * 3] = nx / l; nrm[i * 3 + 1] = 1 / l; nrm[i * 3 + 2] = nz / l;
   }
+  // Shape, for the sand's look: how far past the lane's edge (metres, negative inside it), and how much the point stands above or sits
+  // below its neighbours 2.5 m away (positive on a crest or a lip, negative in a hollow).
+  const shape = new Float32Array(n * 2);
+  for (let i = 0; i < n; i += 1) {
+    if (!used[i]) continue;
+    const c = i % cols, r = Math.floor(i / cols);
+    let sum = 0, cnt = 0;
+    for (const q of [c >= S ? i - S : -1, c + S < cols ? i + S : -1, r >= S ? i - S * cols : -1, r + S < rows ? i + S * cols : -1]) if (q >= 0 && used[q]) { sum += y[q]; cnt += 1; }
+    shape[i * 2] = beyondAt ? beyondAt(c / S, r / S) : 0;
+    shape[i * 2 + 1] = cnt ? y[i] - sum / cnt : 0;
+  }
   // Tiles by block, each with its own compact vertex list.
   const groups = new Map();
   for (let t = 0; t < triBlock.length; t += 1) {
@@ -188,12 +199,13 @@ function buildNearGrid(course, { x0, z0, bcols, brows, keepBlock, fineBlock, hei
     const idx = [];
     for (const t of list) idx.push(vert(tris[t * 3]), vert(tris[t * 3 + 1]), vert(tris[t * 3 + 2]));
     const m = remap.size;
-    const positions = new Float32Array(m * 3), normals = new Float32Array(m * 3);
+    const positions = new Float32Array(m * 3), normals = new Float32Array(m * 3), shapes = new Float32Array(m * 2);
     for (const [i, v] of remap) {
       positions[v * 3] = x0 + (i % cols) * step; positions[v * 3 + 1] = y[i]; positions[v * 3 + 2] = z0 + Math.floor(i / cols) * step;
       normals.set(nrm.subarray(i * 3, i * 3 + 3), v * 3);
+      shapes[v * 2] = shape[i * 2]; shapes[v * 2 + 1] = shape[i * 2 + 1];
     }
-    tiles.push({ positions, normals, indices: m > 65535 ? Uint32Array.from(idx) : Uint16Array.from(idx), vertexCount: m });
+    tiles.push({ positions, normals, shapes, indices: m > 65535 ? Uint32Array.from(idx) : Uint16Array.from(idx), vertexCount: m });
     vertexCount += m; triangleCount += idx.length / 3;
   }
   // For the blowing sand: every lattice point inside a kept block, with heights filled in across the unsplit squares.
@@ -240,6 +252,7 @@ export function buildTerrainGrids(course, baked = null) {
     x0: nx0, z0: nz0, bcols: ncols - 1, brows: nrows - 1, heights, tile: GRID.tile,
     keepBlock: (bi, bj) => cornerBeyond(bi, bj) < GRID.nearBeyond,
     fineBlock: (bi, bj) => Math.min(maskAt(bi, bj), maskAt(bi + 1, bj), maskAt(bi, bj + 1), maskAt(bi + 1, bj + 1)) < GRID.laneBeyond,
+    beyondAt: maskAt,
   });
 
   // Coarse grid out to the horizon, with the corridor cut out (one piece: it's light, and mostly in view anyway).
