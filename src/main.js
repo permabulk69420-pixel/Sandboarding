@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import './style.css';
 import { createCourse } from './course.js';
+import { COURSES, courseById } from './courses/index.js';
 import { createBoardState, stepBoard, speedOf, leanSteer, boardAttitude, BOARD } from './board.js';
 import { clamp, angleDelta } from './math.js';
 import { createSky, createTerrain, LOOK } from './world.js';
@@ -18,7 +19,7 @@ import { pulseHaptics } from './haptics.js';
 
 const params = new URLSearchParams(location.search);
 const BASE = import.meta.env?.BASE_URL ?? './';
-const RUN = Object.freeze({ chargeTime: 0.6, crouchDrop: 0.45, chargeDip: 0.12, name: 'Ridgeline', checkpointEvery: 120, countdown: 3, walkSpeed: 3.2, turnSpeed: 2.2, eye: 1.65 });
+const RUN = Object.freeze({ chargeTime: 0.6, crouchDrop: 0.45, chargeDip: 0.12, checkpointEvery: 120, countdown: 3, walkSpeed: 3.2, turnSpeed: 2.2, eye: 1.65 });
 
 // ---------------------------------------------------------------- renderer, scene, player rig
 const canvas = document.getElementById('world');
@@ -49,9 +50,12 @@ scene.add(new THREE.HemisphereLight(new THREE.Color().copy(LOOK.mid).lerp(LOOK.z
 const sunLight = new THREE.DirectionalLight(new THREE.Color(LOOK.sunColor).multiplyScalar(0.45), 2.2);
 sunLight.position.copy(LOOK.sun).multiplyScalar(100); scene.add(sunLight);
 
-const course = createCourse();
+// Which run: ?run=<id> (the lodge's map table will choose later). Defaults to the first.
+const courseDef = courseById(params.get('run'));
+const runNumber = COURSES.indexOf(courseDef) + 1;
+const course = createCourse(courseDef);
 const status = document.getElementById('status');
-createTerrain(course, { url: `${BASE}terrain/heights.bin`, sandUrl: `${BASE}textures/sand-detail.jpg`, onStatus: t => { status.textContent = t; } }).then(terrain => {
+createTerrain(course, { url: `${BASE}terrain/${course.id}.bin`, sandUrl: `${BASE}textures/sand-detail.jpg`, onStatus: t => { status.textContent = t; } }).then(terrain => {
   scene.add(terrain); status.textContent = ''; enterVR.disabled = !xrSupported; playButton.disabled = false;
   enterVR.textContent = xrSupported ? 'Enter VR' : 'VR not available';
 });
@@ -80,8 +84,8 @@ fader.renderOrder = 100; fader.visible = false; camera.add(fader);
 
 // ---------------------------------------------------------------- game state
 const store = {
-  get best() { try { return Number(localStorage.getItem('sandboarding.best.ridgeline')) || Infinity; } catch { return Infinity; } },
-  set best(v) { try { localStorage.setItem('sandboarding.best.ridgeline', String(v)); } catch { /* private window */ } },
+  get best() { try { return Number(localStorage.getItem(`sandboarding.best.${course.id}`)) || Infinity; } catch { return Infinity; } },
+  set best(v) { try { localStorage.setItem(`sandboarding.best.${course.id}`, String(v)); } catch { /* private window */ } },
 };
 let mode = 'summit'; // summit | countdown | ride | finished (and fly, a dev camera)
 let board = createBoardState();
@@ -129,6 +133,7 @@ function fadeThen(action) { if (!fading) { fading = { t: 0, half: 0.18, action, 
 
 // ---------------------------------------------------------------- welcome screen, VR session
 const enterVR = document.getElementById('enter-vr');
+document.querySelector('#welcome .tag').textContent = `Run ${runNumber} · ${course.name}`;
 // Lean to steer: off unless you tick it on the start screen; remembered on this headset.
 const leanOption = document.getElementById('lean-steer');
 try { leanOption.checked = localStorage.getItem('sandboarding.lean') === '1'; } catch { /* private window */ }
@@ -182,7 +187,7 @@ function statusLines() {
     camera.getWorldPosition(headWorld);
     const near = Math.hypot(headWorld.x - g.x, headWorld.z - g.z) < 7;
     return [
-      { text: `Run 1 · ${RUN.name}`, size: 0.2, bold: true },
+      { text: `Run ${runNumber} · ${course.name}`, size: 0.2, bold: true },
       { text: `Best ${formatTime(best)}`, size: 0.17, colour: '#ffd7a8' },
       { text: near ? 'Press A to drop in' : 'Walk to the start gate', size: 0.17, colour: near ? '#9fe0ff' : '#d8d0c4' },
     ];
@@ -228,7 +233,7 @@ function frame(time) {
     const g = course.pointAt(course.startS);
     camera.getWorldPosition(headWorld);
     const near = Math.hypot(headWorld.x - g.x, headWorld.z - g.z) < 7;
-    startSign.draw([{ text: `Run 1 · ${RUN.name}`, size: 0.3, bold: true }, { text: near ? 'Press A to drop in' : 'Walk up to the gate', size: 0.24, colour: '#9fe0ff' }, { text: `Best ${formatTime(store.best)}`, size: 0.2, colour: '#ffd7a8' }]);
+    startSign.draw([{ text: `Run ${runNumber} · ${course.name}`, size: 0.3, bold: true }, { text: near ? 'Press A to drop in' : 'Walk up to the gate', size: 0.24, colour: '#9fe0ff' }, { text: `Best ${formatTime(store.best)}`, size: 0.2, colour: '#ffd7a8' }]);
     if (near && inp.a) fadeThen(dropIn);
   } else if (mode !== 'fly') {
     if (mode === 'countdown') {

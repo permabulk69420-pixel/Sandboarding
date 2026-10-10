@@ -6,44 +6,9 @@ import { angleDelta, clamp } from '../src/math.js';
 
 const course = createCourse();
 
-function ride({ tuck = 0, brake = 0, limit = 400 } = {}) {
-  const p = course.pointAt(course.startS);
-  const st = createBoardState({ x: p.x, y: p.y, z: p.z, yaw: p.yaw, speed: 2 });
-  const out = { time: 0, maxSpeed: 0, airs: [], bails: 0, maxOff: 0, finished: false };
-  while (out.time < limit) {
-    const loc = course.locate(st.x, st.z);
-    if (loc.s >= course.finishS) { out.finished = true; break; }
-    const aim = course.pointAt(Math.min(course.length, loc.s + 14));
-    const want = Math.atan2(-(aim.x - st.x), -(aim.z - st.z));
-    stepBoard(st, { steer: clamp(-angleDelta(st.yaw, want) * 2.5, -1, 1), tuck, brake }, course, 1 / 72);
-    for (const e of st.events) { if (e.type === 'land' && e.air > 0.3) out.airs.push(loc.s); if (e.type === 'bail') out.bails += 1; }
-    st.events.length = 0;
-    assert.ok([st.x, st.y, st.z, st.vx, st.vy, st.vz].every(Number.isFinite));
-    out.time += 1 / 72;
-    out.maxSpeed = Math.max(out.maxSpeed, speedOf(st));
-    out.maxOff = Math.max(out.maxOff, loc.distance);
-  }
-  return out;
-}
-
-test('a clean run reaches the finish in under three minutes, with air off every kicker', () => {
-  const r = ride();
-  assert.ok(r.finished, 'finished');
-  assert.ok(r.time > 100 && r.time < 260, `time ${r.time}`);
-  for (const k of course.kickers) assert.ok(r.airs.some(s => s > k && s < k + 80), `no air off the kicker at ${k.toFixed(0)} (landed at ${r.airs.map(Math.round)})`);
-  assert.equal(r.bails, 0);
-  assert.ok(r.maxOff < 4, `strayed ${r.maxOff}`);
-});
-
-test('tucking is faster but stays under the speed cap', () => {
-  const stand = ride(), tuck = ride({ tuck: 1 });
-  assert.ok(tuck.time < stand.time - 5, `tuck ${tuck.time} vs ${stand.time}`);
-  assert.ok(tuck.maxSpeed <= BOARD.maxSpeed + 1e-6);
-  assert.ok(tuck.maxSpeed < 33, `top speed ${tuck.maxSpeed}`);
-});
-
-test('braking slows you right down', () => {
-  const r = ride({ brake: 1, limit: 30 });
+test('braking slows you right down', async () => {
+  const { rideCourse } = await import('../src/ride-sim.js');
+  const r = rideCourse(course, { brake: 1, limit: 30 });
   assert.ok(r.maxSpeed < 10, `braking top speed ${r.maxSpeed}`);
 });
 
