@@ -54,6 +54,15 @@ const SIDE_HITS = [
   [2230, 14], [2330, -14], [2430, 14], [2560, -14], [2690, 14], [2820, -14], [2950, 14], [3040, -14], // the sweepers
 ].map(([at, offset]) => ({ ...SIDE_HIT, at, offset }));
 
+// Rails (src/rails.js): bars beside the lane to jump onto, or ride up the ramp at the start of, and grind. from/to: metres along the run;
+// offset: metres right of the centre line (negative = left). A rail carries you through a bend at full speed, with no carving to scrub it.
+const RAILS = [
+  { from: 100, to: 250, offset: 9 }, // on the way down to the serpent
+  { from: 380, to: 520, offset: 9 }, // the inside of the first S-bend...
+  { from: 560, to: 700, offset: -9 }, // ...and of the next, on the other side
+  { from: 2470, to: 2650, offset: 12 }, // round the inside of the long right sweeper
+];
+
 // Silhouettes against the stars (src/landmarks.js): hoodoos and fins near the run, big buttes far out on the dune sea.
 const LANDMARKS = [
   { type: 'hoodoo', s: 140, side: -1, out: 230, height: 70, radius: 16 }, // seen from the summit
@@ -100,6 +109,7 @@ export default {
   kickers: KICKERS,
   gaps: GAPS,
   sideHits: SIDE_HITS,
+  rails: RAILS,
   landmarks: LANDMARKS,
   startS: 50,
   pad: { s: 12, across: 20, ahead: 6, behind: 32 },

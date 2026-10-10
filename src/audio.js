@@ -1,8 +1,8 @@
 // All sound is made on the fly from filtered noise, so there is nothing to download and nothing to license:
-// wind that roars with speed, the hiss of the board on sand, and a thump when you land.
+// wind that roars with speed, the hiss of the board on sand, a thump when you land, and on a rail the rasp of steel and a clang as you hit it.
 
 export function createRideAudio() {
-  let ctx = null, wind = null, hiss = null, master = null;
+  let ctx = null, wind = null, hiss = null, scrape = null, master = null;
 
   function noiseBuffer(seconds = 2) {
     const buf = ctx.createBuffer(1, ctx.sampleRate * seconds, ctx.sampleRate);
@@ -28,16 +28,43 @@ export function createRideAudio() {
     master = ctx.createGain(); master.gain.value = 0.9; master.connect(ctx.destination);
     wind = loop('bandpass', 500, 0.7);
     hiss = loop('highpass', 2400, 0.4);
+    // The grind: a band of noise that sings with speed, roughened by a fast flutter so it rasps like metal under a board.
+    scrape = loop('bandpass', 2600, 2.4);
+    const flutter = ctx.createOscillator(); flutter.type = 'sawtooth'; flutter.frequency.value = 55;
+    const depth = ctx.createGain(); depth.gain.value = 0;
+    flutter.connect(depth).connect(scrape.gain.gain); flutter.start();
+    scrape.flutter = flutter; scrape.depth = depth;
   }
 
-  // speed in m/s, grounded: on the sand, carve: 0..1 how hard you are turning.
-  function update(speed, grounded, carve = 0) {
+  // speed in m/s, grounded: on the sand, carve: 0..1 how hard you are turning, grinding: on a rail (the sand is silent then).
+  function update(speed, grounded, carve = 0, grinding = false) {
     if (!ctx) return;
     const t = ctx.currentTime, v = Math.min(speed / 26, 1.2);
     wind.gain.gain.setTargetAtTime(0.03 + 0.42 * v * v, t, 0.15);
     wind.filter.frequency.setTargetAtTime(320 + 900 * v, t, 0.2);
-    hiss.gain.gain.setTargetAtTime(grounded ? Math.min(0.32, 0.04 + 0.22 * v + 0.12 * carve) : 0, t, grounded ? 0.05 : 0.02);
+    const sand = grounded && !grinding;
+    hiss.gain.gain.setTargetAtTime(sand ? Math.min(0.32, 0.04 + 0.22 * v + 0.12 * carve) : 0, t, sand ? 0.05 : 0.02);
     hiss.filter.frequency.setTargetAtTime(1800 + 1600 * v, t, 0.1);
+    const level = grinding ? Math.min(0.3, 0.1 + 0.2 * v) : 0;
+    scrape.gain.gain.setTargetAtTime(level, t, grinding ? 0.03 : 0.05);
+    scrape.depth.gain.setTargetAtTime(level * 0.9, t, 0.03);
+    scrape.filter.frequency.setTargetAtTime(1900 + 2600 * v, t, 0.08);
+    scrape.flutter.frequency.setTargetAtTime(38 + 70 * v, t, 0.1);
+  }
+
+  // The clang of landing on a rail: a burst of noise and two ringing partials, louder the harder you came down (strength 0 to 1).
+  function clang(strength = 0.6) {
+    if (!ctx) return;
+    const t = ctx.currentTime, loud = 0.12 + 0.3 * Math.min(1, strength);
+    const src = ctx.createBufferSource(); src.buffer = noiseBuffer(0.3);
+    const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 3400; f.Q.value = 1.1;
+    const g = ctx.createGain(); g.gain.setValueAtTime(loud, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.14);
+    src.connect(f).connect(g).connect(master); src.start(t); src.stop(t + 0.3);
+    for (const [hz, gain, ring] of [[1180, 0.5, 0.45], [1763, 0.3, 0.3], [2890, 0.16, 0.18]]) {
+      const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.value = hz * (0.98 + 0.04 * Math.random());
+      const og = ctx.createGain(); og.gain.setValueAtTime(loud * gain, t); og.gain.exponentialRampToValueAtTime(0.0005, t + ring);
+      o.connect(og).connect(master); o.start(t); o.stop(t + ring + 0.05);
+    }
   }
 
   function thump(strength = 1) {
@@ -62,5 +89,5 @@ export function createRideAudio() {
 
   function silence() { if (ctx) update(0, false); }
 
-  return { start, update, thump, chime, silence };
+  return { start, update, thump, chime, clang, silence };
 }

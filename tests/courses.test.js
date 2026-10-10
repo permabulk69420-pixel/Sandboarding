@@ -5,6 +5,7 @@ import { createCourse } from '../src/course.js';
 import { COURSES } from '../src/courses/index.js';
 import { rideCourse } from '../src/ride-sim.js';
 import { BOARD } from '../src/board.js';
+import { railProblems } from '../src/rails.js';
 
 for (const def of COURSES) {
   const course = createCourse(def);
@@ -81,11 +82,31 @@ for (const def of COURSES) {
       assert.ok(r.finished, `${label}: never finished (stalls at ${r.stalls.map(x => x.s.toFixed(0))})`);
       assert.equal(r.bails.length, 0, `${label}: bailed at ${r.bails.map(b => b.s.toFixed(0))}`);
       assert.equal(r.stalls.length, 0, `${label}: stalled at ${r.stalls.map(x => x.s.toFixed(0))}`);
+      assert.equal(r.grinds.length, 0, `${label}: a rail caught the rider at ${r.grinds.map(g => g.s.toFixed(0))}`); // rails are off the racing line
       assert.ok(r.maxOff < 6, `${label}: strayed ${r.maxOff.toFixed(1)} m off the line`); // the simple autopilot drifts a little at speed; lanes are 9 m+ either side
       assert.ok(r.maxSpeed <= BOARD.maxSpeed + 1e-6);
       assert.ok(r.time < 480, `${label}: took ${r.time.toFixed(0)} s`);
     }
     course.kickers.forEach((k, i) => assert.ok(stand.airs.some(a => a.s > k && a.s < k + course.kickerReach[i]), `no air off the kicker at ${k.toFixed(0)}`));
     assert.ok(tuck.time < stand.time, 'tucking is faster');
+  });
+
+  test(`${name} every rail keeps the rules: off the racing line, inside the lane, clear of the features, over ground the bar can follow`, () => {
+    for (const [i, rail] of course.rails.entries()) assert.deepEqual(railProblems(rail, course), [], `rail ${i} (${rail.from.toFixed(0)}-${rail.to.toFixed(0)} m)`);
+  });
+
+  test(`${name} a rider lined up on each rail is caught at its start and grinds it to the end`, () => {
+    for (const [i, rail] of course.rails.entries()) {
+      const label = `rail ${i} (${rail.from.toFixed(0)}-${rail.to.toFixed(0)} m)`;
+      const r = rideCourse(course, { from: rail.from - 45, until: rail.to + 30, speed: 12, offset: s => rail.offsetAt(s) });
+      assert.ok(!r.nonFinite, `${label}: physics blew up`);
+      const mine = r.grinds.filter(g => g.rail === i), starts = mine.filter(g => g.phase === 'start'), ends = mine.filter(g => g.phase === 'end');
+      assert.equal(starts.length, 1, `${label}: caught ${starts.length} times`);
+      assert.ok(starts[0].s < rail.from + 12, `${label}: caught only at ${starts[0].s.toFixed(0)} m`);
+      assert.equal(ends.length, 1, `${label}: let go ${ends.length} times`);
+      assert.equal(ends[0].reason, 'end', `${label}: left the rail by ${ends[0].reason}`);
+      assert.ok(ends[0].distance > rail.length - 12, `${label}: ground ${ends[0].distance.toFixed(0)} of ${rail.length.toFixed(0)} m`);
+      assert.equal(r.bails.length, 0, `${label}: bailed`);
+    }
   });
 }

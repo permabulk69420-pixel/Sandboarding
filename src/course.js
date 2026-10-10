@@ -11,6 +11,7 @@
 
 import { clamp, mix, smooth, fbm, noise } from './math.js';
 import { COURSES } from './courses/index.js';
+import { buildRail } from './rails.js';
 
 // The shaping rules every course shares. Each course's own layout lives in src/courses/.
 export const COURSE = Object.freeze({
@@ -314,15 +315,28 @@ export function createCourse(def = COURSES[0]) {
   }
 
   // A point on the centre line and the downhill heading there (three.js yaw: 0 faces -z, positive turns left).
-  function pointAt(s) {
+  function centreAt(s) {
     const i = clamp(Math.floor(s), 0, n - 2), t = clamp(s - i, 0, 1);
-    const x = mix(pts[i][0], pts[i + 1][0], t), z = mix(pts[i][1], pts[i + 1][1], t);
-    const yaw = Math.atan2(-tx[i], -tz[i]);
-    return { x, z, y: heightAt(x, z), yaw };
+    return { x: mix(pts[i][0], pts[i + 1][0], t), z: mix(pts[i][1], pts[i + 1][1], t), yaw: Math.atan2(-tx[i], -tz[i]) };
+  }
+  function pointAt(s) {
+    const c = centreAt(s);
+    return { x: c.x, z: c.z, y: heightAt(c.x, c.z), yaw: c.yaw };
   }
 
+  // Rails (src/rails.js): bars beside the lane to jump onto and grind. Built over the ground as it is, so they follow it.
+  const rails = (def.rails || []).map(spec => buildRail(spec, { centreAt, heightAt }, k));
+  // Everything that shapes the lane's ground, with the stretch of the run it covers (from, to) and the strip across the lane it reaches
+  // (lo, hi: metres right of the centre line), so a rail can be checked for keeping clear of them.
+  const obstacles = [
+    ...kickers.map(kk => ({ type: 'kicker', from: kk.at - kk.length, to: kk.at + kk.drop, lo: -(kk.lane + (kk.edge ?? 1.8)), hi: kk.lane + (kk.edge ?? 1.8) })),
+    ...gaps.map(gp => ({ type: 'gap', from: gp.from, to: gp.to, lo: -(gp.lane + (gp.edge ?? 1.8)), hi: gp.lane + (gp.edge ?? 1.8) })),
+    ...rollers.map(r => { const w = Math.max(halfWidth(r.from), halfWidth((r.from + r.to) / 2), halfWidth(r.to)); return { type: 'roller', from: r.from, to: r.to, lo: -w, hi: w }; }),
+    ...sideHits.map(sh => ({ type: 'side', from: sh.at - sh.length, to: sh.at + sh.drop, lo: sh.offset - sh.lane - 2.5, hi: sh.offset + sh.lane + 2.5 })),
+  ];
+
   return {
-    length, points: pts, heightAt, normalAt, locate, pointAt, elevation, halfWidth,
+    length, points: pts, heightAt, normalAt, locate, pointAt, elevation, halfWidth, rails, obstacles,
     id: def.id, name: def.name, startS: def.startS * k, finishS: def.finishS * k, plain: def.plain ?? -16,
     pad: pad && { x: pad.x, z: pad.z, height: pad.height, s: def.pad.s * k },
     landmarks: (def.landmarks || []).map(l => (l.s === undefined ? l : { ...l, s: l.s * k })), // placed by `at` rather than `s`: nothing to scale

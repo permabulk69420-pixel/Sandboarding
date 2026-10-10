@@ -11,9 +11,13 @@
 // So smooth, early turns carve and keep your speed; yanking the stick at full speed is a skid (which is also how you check your speed).
 // The old, direct steering is still here as the "classic" feel (useFeel('classic'), or ?feel=classic in the game).
 // If the ground falls away faster than you do (a kicker's lip, the crest of a roller at speed) you are in the air until you come down.
+// Land on a rail (src/rails.js), or ride up the ramp at its start, and you grind: the bar carries you along its length, gravity and the
+// bar's slick friction are all that act on you, and you leave by hopping off or by running out of rail. A rail catches a board that is
+// close to it, coming down (not rising) and travelling roughly along it, and turns the rest of your speed into the bar's direction.
 // Everything is per second and lives in BOARD so it is easy to tune.
 
 import { clamp, mix, smooth, angleDelta } from './math.js';
+import { railAt, nearestOnRail, railYaw } from './rails.js';
 
 export const BOARD = Object.freeze({
   gravity: 9.81,
@@ -50,6 +54,19 @@ export const BOARD = Object.freeze({
   landClean: 0.52, // radians (30 degrees) between the board and the ground on landing that still counts as clean...
   landBail: 0.96, // ...and beyond this (55 degrees) you bail; in between is a heavy landing
   heavyKeep: 0.72, // share of your speed a heavy landing keeps
+  // Rails (src/rails.js)
+  railFriction: 0.012, // friction coefficient of a waxed bar (sand is 0.026): slicker than the ground, so a long grind keeps your speed
+  railReach: 1.0, // metres to either side of the bar that still catch the board
+  railBelow: 0.3, // the board may be this far below the bar's top (riding up its ramp) and still be caught...
+  railAbove: 0.5, // ...or this far above it (coming down onto it)
+  railRise: 1.0, // but not while it is still rising faster than this (m/s, relative to the bar): you can't hook a rail from underneath
+  railAngle: 0.7, // cosine of the angle between your travel and the bar: caught only within about 45 degrees of its direction
+  railMinSpeed: 2, // m/s: slower than this you just step over it
+  railTilt: 0.9, // radians of flip you can be turned over by (about 50 degrees) and still land on a bar
+  railCool: 0.3, // seconds after leaving a bar before any bar can catch you again
+  railTurn: 3.2, // radians per second the board swings round to lie along the bar
+  railSnap: 10, // per second: how quickly you slide onto the bar's line after landing a little to one side of it or above it...
+  railSnapMax: 4, // ...but never faster than this many metres per second, so being caught off to one side is a glide and not a jolt
 });
 
 // The original feel: the stick turns the nose directly, grips fully at once, and a skid costs only the speed it turns away.
@@ -63,6 +80,7 @@ export function createBoardState({ x = 0, y = 0, z = 0, yaw = 0, speed = 0 } = {
   return {
     x, y, z, vx: fx * speed, vy: 0, vz: fz * speed, yaw, steer: 0, edge: 0, grounded: true, air: 0, nx: 0, ny: 1, nz: 0, events: [],
     pitch: 0, pitchVel: 0, upx: 0, upy: 1, upz: 0, yaw0: yaw, // in the air: tilt from the ground's angle below, and the yaw you left at
+    grind: null, grindCool: 0, // on a rail: { rail, index, u, vt, time, distance, ox, oy, oz } while you are on one; seconds until a rail can catch you again
   };
 }
 
@@ -70,8 +88,10 @@ export const speedOf = st => Math.hypot(st.vx, st.vy, st.vz);
 
 // input: { steer: -1..1 (positive = right), brake: 0..1, tuck: 0..1, ollie: false, or the jump's charge 0..1 on the frame you release it,
 //   pitch: -1..1 in the air (positive = nose up, toward a backflip) }
-// ground: { heightAt(x, z), normalAt(x, z, out) }
-// Returns the state (mutated). `events` collects { type: 'launch' | 'land' | 'bail', ... } for sound and haptics; the caller clears it.
+// ground: { heightAt(x, z), normalAt(x, z, out), rails? } (a course is one)
+// Returns the state (mutated). `events` collects { type: 'launch' | 'land' | 'bail' | 'grind', ... } for sound and haptics; the caller clears it.
+// A 'grind' event has the rail's index in ground.rails, and phase 'start' (with the speed you hit the bar at and how hard you came down) or 'end' (with why: 'end' of the rail,
+// 'jump' off it, or 'back' off its start, plus how long and how far you ground). While you grind `grounded` stays true and `grind` is set.
 export function stepBoard(st, input, ground, dt) {
   const steps = Math.max(1, Math.ceil(dt / BOARD.substep));
   const h = dt / steps;
@@ -98,6 +118,92 @@ function takeOff(st, ollie) {
   st.events.push({ type: 'launch', ollie, speed: speedOf(st) });
 }
 
+// ---------------------------------------------------------------- rails
+const rs = { x: 0, y: 0, z: 0, tx: 0, ty: 0, tz: -1 }; // scratch: a place on a rail
+const rn = { u: 0, d: 0 };
+
+// Puts the board where its rail says: on the bar (plus whatever of the landing's offset is still sliding out), going along it, with its "up"
+// square to the bar's slope (straight up, tipped only forwards or back).
+function ride(st, gr) {
+  railAt(gr.rail, gr.u, rs);
+  st.x = rs.x + gr.ox; st.y = rs.y + gr.oy; st.z = rs.z + gr.oz;
+  st.vx = rs.tx * gr.vt; st.vy = rs.ty * gr.vt; st.vz = rs.tz * gr.vt;
+  const l = Math.sqrt(Math.max(1e-9, 1 - rs.ty * rs.ty));
+  st.nx = -rs.ty * rs.tx / l; st.ny = (1 - rs.ty * rs.ty) / l; st.nz = -rs.ty * rs.tz / l;
+}
+
+// Is a rail close enough, and is the board coming at it the right way, to be caught? In the air a bar catches you coming down onto it; on the
+// ground only the first few metres do, where it rises out of the sand. `airborne` says which.
+function tryGrind(st, rails, airborne) {
+  if (st.grindCool > 0 || st.grind) return false;
+  const speed = speedOf(st), reach = BOARD.railReach;
+  if (speed < BOARD.railMinSpeed) return false;
+  for (let r = 0; r < rails.length; r += 1) {
+    const rail = rails[r];
+    if (st.x < rail.minX - reach || st.x > rail.maxX + reach || st.z < rail.minZ - reach || st.z > rail.maxZ + reach) continue;
+    if (st.y > rail.maxY + BOARD.railAbove || st.y < rail.minY - BOARD.railBelow) continue;
+    nearestOnRail(rail, st.x, st.z, rn);
+    if (rn.d > reach) continue;
+    railAt(rail, rn.u, rs);
+    const dy = st.y - rs.y;
+    if (dy > BOARD.railAbove || dy < -BOARD.railBelow) continue;
+    const vt = st.vx * rs.tx + st.vy * rs.ty + st.vz * rs.tz;
+    if (vt < speed * BOARD.railAngle) continue; // across it, or going the wrong way
+    const l = Math.sqrt(Math.max(1e-9, 1 - rs.ty * rs.ty));
+    const vn = (st.vx * -rs.ty * rs.tx + st.vy * (1 - rs.ty * rs.ty) + st.vz * -rs.ty * rs.tz) / l; // your speed up away from the bar
+    if (vn > BOARD.railRise) continue;
+    if (airborne) { if (Math.abs(angleDelta(0, st.pitch)) > BOARD.railTilt) continue; } // turned over mid-flip
+    else if (rn.u > rail.entry + 1) continue;
+    const air = st.air;
+    // Lifted up onto a bar that stands above you (riding up its ramp) is paid for out of your speed, as being lifted onto the sand is.
+    const lift = Math.max(0, -dy), keep = vt > 1e-6 ? Math.sqrt(Math.max(0, vt * vt - 2 * BOARD.gravity * lift)) : 0;
+    st.grind = { rail, index: r, u: rn.u, vt: keep, time: 0, distance: 0, ox: st.x - rs.x, oy: st.y - rs.y, oz: st.z - rs.z };
+    st.grounded = true; st.air = 0; st.pitch = 0; st.pitchVel = 0;
+    ride(st, st.grind);
+    st.events.push({ type: 'grind', phase: 'start', rail: r, speed: keep, impact: Math.max(0, -vn), air });
+    return true;
+  }
+  return false;
+}
+
+// Off the bar: hopped off ('jump', with the share of a full pop), ran out of rail ('end') or slid back off its start ('back').
+function leaveRail(st, ground, reason, pop = 0) {
+  const gr = st.grind;
+  st.grind = null; st.grindCool = BOARD.railCool;
+  st.events.push({ type: 'grind', phase: 'end', rail: gr.index, reason, time: gr.time, distance: gr.distance, speed: gr.vt });
+  if (reason === 'jump') {
+    const p = BOARD.ollie * pop;
+    st.vx += st.nx * p; st.vy += st.ny * p; st.vz += st.nz * p;
+    takeOff(st, true);
+  } else if (st.y - ground.heightAt(st.x, st.z) > BOARD.launchGap) takeOff(st, false); // off the end of a bar that stands clear of the sand
+  // else the bar ended in the sand and you ride on
+}
+
+// One substep on a rail. Gravity pulls you along it, the bar's friction and the air hold you back; nothing else acts on you (no steering).
+function grindStep(st, ground, tuck, dt, ollie) {
+  const gr = st.grind;
+  railAt(gr.rail, gr.u, rs);
+  let vt = gr.vt - BOARD.gravity * rs.ty * dt;
+  const slow = (BOARD.railFriction * BOARD.gravity * Math.sqrt(Math.max(0, 1 - rs.ty * rs.ty)) + mix(BOARD.airDrag, BOARD.tuckDrag, tuck) * vt * vt) * dt;
+  vt = vt > 0 ? Math.max(0, vt - slow) : Math.min(0, vt + slow);
+  gr.vt = clamp(vt, -BOARD.maxSpeed, BOARD.maxSpeed);
+  gr.u += gr.vt * dt; gr.time += dt; gr.distance += Math.abs(gr.vt) * dt;
+  const off = Math.hypot(gr.ox, gr.oy, gr.oz);
+  if (off > 1e-9) { // slide onto the bar's line: exponentially, but at most railSnapMax metres per second
+    const f = Math.max(0, 1 - Math.min(off * (1 - Math.exp(-BOARD.railSnap * dt)), BOARD.railSnapMax * dt) / off);
+    gr.ox *= f; gr.oy *= f; gr.oz *= f;
+  }
+  const end = gr.u >= gr.rail.length, back = gr.u <= 0 && gr.vt <= 0;
+  if (end) gr.u = gr.rail.length; else if (back) gr.u = 0;
+  ride(st, gr);
+  // The board swings round to lie along the bar (backwards if you are sliding back down it).
+  const want = railYaw(rs.tx, rs.tz) + (gr.vt < 0 ? Math.PI : 0);
+  st.yaw += clamp(angleDelta(st.yaw, want), -BOARD.railTurn * dt, BOARD.railTurn * dt);
+  if (ollie !== false) leaveRail(st, ground, 'jump', mix(BOARD.ollieTap, BOARD.ollieFull, ollie));
+  else if (end) leaveRail(st, ground, 'end');
+  else if (back) leaveRail(st, ground, 'back');
+}
+
 // Which way the board faces: { f: forward (nose), u: up }. On the ground it lies on the sand. In the air it starts from the ground's angle
 // below you (so with the stick centred you land square) and is tilted by your flip about its own side axis.
 export function boardAttitude(st, out = { f: { x: 0, y: 0, z: -1 }, u: { x: 0, y: 1, z: 0 } }) {
@@ -120,6 +226,8 @@ function substep(st, input, ground, dt, ollie) {
   // The edge rolls toward where the stick asks, at a limited rate.
   if (B.edgeRate) st.edge += clamp(steerTarget - st.edge, -B.edgeRate * dt, B.edgeRate * dt); else st.edge = st.steer;
   const brake = clamp(input.brake || 0, 0, 1), tuck = clamp(input.tuck || 0, 0, 1);
+  if (st.grindCool > 0) st.grindCool -= dt;
+  if (st.grind) { grindStep(st, ground, tuck, dt, ollie); return; }
   let speed = speedOf(st);
 
   if (st.grounded) {
@@ -191,6 +299,8 @@ function substep(st, input, ground, dt, ollie) {
 
   st.x += st.vx * dt; st.y += st.vy * dt; st.z += st.vz * dt;
   const ground_y = ground.heightAt(st.x, st.z);
+  const rails = ground.rails && ground.rails.length ? ground.rails : null;
+  if (rails && !st.grounded && tryGrind(st, rails, true)) return; // a bar in the way is reached before the sand below it
 
   if (st.grounded) {
     if (st.y - ground_y > BOARD.launchGap) {
@@ -236,4 +346,5 @@ function substep(st, input, ground, dt, ollie) {
     }
     st.air = 0;
   }
+  if (rails && st.grounded) tryGrind(st, rails, false); // riding up the ramp at the start of a bar
 }

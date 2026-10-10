@@ -64,6 +64,15 @@ const SIDE_HITS = [
   [2300, -12], [2365, 14], [2450, -16], [2525, 16], [2600, -14], [2665, 12], // the long finish
 ].map(([at, offset]) => ({ ...SIDE_HIT, at, offset }));
 
+
+// Rails (src/rails.js): bars beside the lane to jump onto, or ride up the ramp at the start of, and grind. from/to: metres along the run;
+// offset: metres right of the centre line (negative = left). They stand clear of the kickers and side hits, and well off the racing line.
+const RAILS = [
+  { from: 100, to: 200, offset: -9 }, // on the first pitch, to learn on
+  { from: 880, to: 1110, offset: -9 }, // along the bowl: a long one, easy to hit and a long way to go
+  { from: 1900, to: 2030, offset: -7 }, // through the canyon
+];
+
 // Landmarks: sandstone buttes and mesas that give each section its own skyline (src/landmarks.js). s along the run, side -1 left / 1 right,
 // out = metres from the centre line (far past the walls, where nobody rides), height above the lane there and radius in metres.
 const LANDMARKS = [
@@ -98,6 +107,7 @@ export default {
   kickers: KICKERS,
   gaps: GAPS,
   sideHits: SIDE_HITS,
+  rails: RAILS,
   landmarks: LANDMARKS,
   startS: 50, // the start gate
   pad: { s: 12, across: 20, ahead: 6, behind: 32 }, // the lodge's level pad on the summit (its door 12 m down the line, facing downhill)

@@ -15,10 +15,12 @@ import { createVRHands } from './hands.js';
 import { createSandPuffs } from './sand-puffs.js';
 import { pulseHaptics } from './haptics.js';
 import { createBoardGrab } from './board-grab.js';
+import { createRails } from './rails-view.js';
+import { createSparks } from './sparks.js';
 
 // Sandboarding, first run. You stand on the summit, walk to the start gate, press A to drop in, and ride the course to the finish
 // against the clock. Thumbstick to carve, trigger to drag the tail and slow down, crouch for speed, A to hop, B back to the last
-// checkpoint, Y back to the summit. On a desktop: WASD/arrows, Space, R and T, mouse to look.
+// checkpoint, Y back to the summit. Jump onto a rail (or ride up its ramp) to grind it. On a desktop: WASD/arrows, Space, R and T, mouse to look.
 
 const params = new URLSearchParams(location.search);
 useFeel(params.get('feel')); // ?feel=classic: the original direct steering, for comparing
@@ -77,6 +79,7 @@ createTerrain(course, { url: `${BASE}terrain/${course.id}.bin?v=${BUILD}`, sandU
 scene.add(createGate(course, course.startS, 'START', { bg: '#2f7fd8' }));
 scene.add(createGate(course, course.finishS, 'FINISH', { bg: '#e8642c' }));
 scene.add(createLaneFlags(course));
+scene.add(createRails(course));
 
 const boardMesh = createBoardMesh(); scene.add(boardMesh);
 loadBoardModel(boardMesh, `${BASE}models/board/sirocco_dune156.glb`);
@@ -87,6 +90,7 @@ if (!params.has('nolodge')) {
     .then(l => { lodge = l; if (mode === 'summit') placeOnSummit(); }).catch(error => console.warn('lodge', error));
 }
 const puffs = createSandPuffs({ scene, sun: sunUniform, heightAt: course.heightAt, dust: look.dust, dustLight: look.dustLight });
+const sparks = createSparks({ scene });
 const audio = createRideAudio();
 const input = createInput();
 const hands = createVRHands({ renderer, scene, parent: rig });
@@ -113,11 +117,13 @@ const store = {
 let mode = 'summit'; // summit | countdown | ride | finished (and fly, a dev camera)
 let board = createBoardState();
 let runTime = 0, countdown = 0, finishedFor = 0, lastCheckpoint = course.startS, result = null;
-let rigYaw = 0, headOffset = new THREE.Vector2(), standHeight = RUN.eye, rumbleClock = 0, sprayClock = 0, lostFor = 0;
+let rigYaw = 0, headOffset = new THREE.Vector2(), standHeight = RUN.eye, rumbleClock = 0, sprayClock = 0, sparkClock = 0, grindClock = 0, lostFor = 0;
+const grindRun = { count: 0, distance: 0 }; // this run's grinds: how many rails, and how far along them
 let charge = 0, chargeClock = 0, crouched = false, crouchAmount = 0; // the jump's wind-up (0..1) and the right-stick crouch
 let dip = 0; // the little duck while winding up a jump, eased
 let fading = null; // { t, half, action }
 const autopilot = params.has('auto');
+const autoRail = autopilot && params.has('rail') ? course.rails[Number(params.get('rail'))] : null; // dev: ?auto&rail=<i> aims for that rail's line instead of the centre line
 const frozenTime = params.has('time') ? Number(params.get('time')) || 0 : null; // ?time=<seconds>: stop the sky's clock, for repeatable screenshots
 
 const groundAt = (x, z) => lodge?.floorAt(x, z) ?? course.heightAt(x, z); // on foot: the cabin's floor where there is one
@@ -148,6 +154,7 @@ function dropIn() {
   standHeight = renderer.xr.isPresenting ? Math.max(1.2, camera.position.y) : RUN.eye;
   charge = 0; crouched = false; crouchAmount = 0;
   mode = 'countdown'; countdown = RUN.countdown; runTime = 0; lastCheckpoint = course.startS; result = null; lostFor = 0;
+  grindRun.count = 0; grindRun.distance = 0;
   startSign.mesh.visible = false; finishSign.mesh.visible = false;
   audio.chime(false);
 }
@@ -221,6 +228,16 @@ let lastTime = 0;
 
 function handsPulse(strength, ms) { for (const s of hands.states) pulseHaptics(s, strength, ms); }
 
+// Sparks off the bar under the board, from near the nose and the tail (the middle is hidden under the deck): they leave with much of the
+// board's speed (they are carried along with you for a moment) and a lot of scatter, then the air takes them and they fall behind.
+function emitSparks(count, scale) {
+  const fx = -Math.sin(board.yaw), fz = -Math.cos(board.yaw), speed = speedOf(board);
+  for (const along of [0.55, -0.55]) {
+    sparks.emit(board.x + fx * along, board.y + 0.03, board.z + fz * along, board.vx * 0.6, board.vy * 0.6, board.vz * 0.6,
+      { count: Math.max(1, Math.round(count / 2)), spread: 1.4 + speed * 0.03, up: 1.4 + speed * 0.03, scale });
+  }
+}
+
 function statusLines() {
   const best = store.best;
   if (mode === 'summit') {
@@ -242,7 +259,7 @@ function statusLines() {
   ];
   return [
     { text: formatTime(runTime), size: 0.3, bold: true },
-    { text: `${kmh} km/h`, size: 0.2, colour: '#ffd7a8' },
+    { text: board.grind ? `${kmh} km/h  ·  GRIND  ·  A to hop off` : `${kmh} km/h`, size: 0.2, colour: board.grind ? '#ffd27a' : '#ffd7a8' },
     { text: lostFor > 1.5 ? 'B back to the run' : 'B checkpoint · Y summit', size: 0.15, colour: lostFor > 1.5 ? '#9fe0ff' : '#d8d0c4' },
   ];
 }
@@ -290,7 +307,8 @@ function frame(time) {
       const lean = session && leanOption.checked ? leanSteer(camera.position.x - headOffset.x) : 0;
       let steer = clamp(inp.steer + lean, -1, 1), brake = inp.brake;
       if (autopilot) {
-        const aim = course.pointAt(Math.min(course.length, loc.s + 14));
+        const ahead = Math.min(course.length, loc.s + 14), aim = course.pointAt(ahead);
+        if (autoRail) { const o = autoRail.offsetAt(ahead); aim.x += Math.cos(aim.yaw) * o; aim.z -= Math.sin(aim.yaw) * o; }
         steer = clamp(-angleDelta(board.yaw, Math.atan2(-(aim.x - board.x), -(aim.z - board.z))) * 2.5, -1, 1);
       }
       // Crouch: squat for real, or click the right stick to toggle it. Either way you tuck for speed.
@@ -321,6 +339,19 @@ function frame(time) {
           const hit = Math.min(1, e.impact / 8 + (e.heavy ? 0.35 : 0)); // a heavy (badly angled) landing hits harder
           audio.thump(hit); if (e.impact > 2 || e.heavy) puffs.impact(board.x, board.z, { size: 0.7, strength: hit }); handsPulse(Math.min(1, 0.25 + hit * 0.7), e.heavy ? 110 : 60);
         }
+        if (e.type === 'grind' && e.phase === 'start') {
+          // Down on a rail: a clang, a jolt through both hands, and a shower of sparks.
+          grab.releaseAll();
+          const hit = Math.min(1, e.impact / 7);
+          audio.clang(0.3 + 0.7 * hit); handsPulse(Math.min(1, 0.5 + hit * 0.5), 90);
+          emitSparks(14 + Math.round(hit * 20), 1.6);
+          grindRun.count += 1;
+        }
+        if (e.type === 'grind' && e.phase === 'end') {
+          grindRun.distance += e.distance;
+          handsPulse(0.35, 50);
+          if (e.reason === 'jump') audio.clang(0.15);
+        }
         if (e.type === 'bail') {
           grab.releaseAll();
           // A crash: thump, sand everywhere, then a quick fade and you're back on your feet on the run, a little slower.
@@ -335,18 +366,21 @@ function frame(time) {
       }
       board.events.length = 0;
 
-      // Sand spray off the tail, more when carving hard.
-      const carve = Math.abs(board.steer) * clamp(speed / 12, 0, 1);
-      sprayClock += dt;
-      if (board.grounded && speed > 5 && sprayClock > 0.07) {
+      // Sand spray off the tail, more when carving hard. (On a rail there is no sand: sparks instead.)
+      const grinding = Boolean(board.grind);
+      const carve = grinding ? 0 : Math.abs(board.steer) * clamp(speed / 12, 0, 1);
+      sprayClock += dt; sparkClock += dt; grindClock += dt;
+      if (grinding && sparkClock > 0.02) { sparkClock = 0; emitSparks(2 + Math.round(speed / 7), 1); }
+      if (board.grounded && !grinding && speed > 5 && sprayClock > 0.07) {
         sprayClock = 0;
         const fx = -Math.sin(board.yaw), fz = -Math.cos(board.yaw);
         puffs.kick(board.x - fx * 0.8, board.z - fz * 0.8, fx, fz, { size: 0.35 + carve * 0.35, count: 1 + Math.round(carve * 3 + speed / 14) });
       }
-      // A soft rumble through both hands while the board is on the sand.
+      // A soft rumble through both hands while the board is on the sand, a hard buzz on a rail.
       rumbleClock += dt;
-      if (board.grounded && speed > 3 && rumbleClock > 0.09) { rumbleClock = 0; handsPulse(0.04 + speed * 0.004 + carve * 0.08, 40); }
-      audio.update(speed, board.grounded, carve);
+      if (board.grounded && !grinding && speed > 3 && rumbleClock > 0.09) { rumbleClock = 0; handsPulse(0.04 + speed * 0.004 + carve * 0.08, 40); }
+      if (grinding && grindClock > 0.05) { grindClock = 0; handsPulse(0.2 + 0.35 * clamp(speed / 30, 0, 1), 45); }
+      audio.update(speed, board.grounded, carve, grinding);
 
       if (mode === 'ride') {
         runTime += dt;
@@ -362,7 +396,7 @@ function frame(time) {
           mode = 'finished'; finishedFor = 0; audio.chime(true); handsPulse(0.6, 120);
           finishSign.mesh.visible = true;
           finishSign.draw([{ text: result.newBest ? 'New best!' : 'Finish', size: 0.24, bold: true, colour: result.newBest ? '#ffd27a' : '#fff4e2' },
-            { text: formatTime(result.time), size: 0.36, bold: true }, { text: `Best ${formatTime(result.best)}`, size: 0.18, colour: '#ffd7a8' },
+            { text: formatTime(result.time), size: 0.36, bold: true }, { text: `Best ${formatTime(result.best)}${grindRun.count ? `  ·  Grind ${Math.round(grindRun.distance)} m` : ''}`, size: 0.18, colour: '#ffd7a8' },
             { text: 'A ride again  ·  Y back to the summit', size: 0.15, colour: '#d8d0c4' }]);
         }
         if (inp.b) fadeThen(respawn);
@@ -400,7 +434,7 @@ function frame(time) {
     dip += ((charge > 0 ? RUN.chargeDip : 0) - dip) * Math.min(1, dt * 35);
     rig.position.y -= RUN.crouchDrop * crouchAmount + dip;
     feet.set(0, HIPS, 0).applyQuaternion(rig.quaternion);
-    boardMesh.position.set(board.x, board.y + HIPS + 0.025, board.z).sub(feet); // 2.5 cm up: the drawn sand is flat between its points, so in a hollow it sits a touch above the real ground
+    boardMesh.position.set(board.x, board.y + HIPS + (board.grind ? 0.004 : 0.025), board.z).sub(feet); // 2.5 cm up: the drawn sand is flat between its points, so in a hollow it sits a touch above the real ground (on a bar it rides right on top)
   }
 
   if (!session && playing) hudText.textContent = statusLines().map(l => l.text).join('   ·   ');
@@ -411,6 +445,7 @@ function frame(time) {
   hands.update(dt);
   grab.place();
   puffs.update(dt);
+  sparks.update(dt);
   worldTime.value = frozenTime ?? (time / 1000) % 3600;
   if (windSand) { camera.getWorldPosition(headWorld); windSand.update(time / 1000, headWorld, session ? WIND_SAND.vrViewHeight : renderer.domElement.height); }
   renderer.render(scene, camera);
@@ -418,7 +453,7 @@ function frame(time) {
 
 placeOnSummit();
 // Dev views for screenshots and quick testing: ?s=<metres down the run> starts you riding there, ?auto drives for you,
-// ?play skips the welcome screen, ?pitch=<radians> tilts the desktop camera.
+// ?play skips the welcome screen, ?pitch=<radians> tilts the desktop camera, ?auto&rail=<i> rides toward rail i.
 if (params.has('s')) { mode = 'ride'; boardAt(Number(params.get('s')) || course.startS, 12); startSign.mesh.visible = false; }
 if (params.has('pitch')) camera.rotation.x = Number(params.get('pitch'));
 if (params.has('play')) { playing = true; welcome.hidden = true; hudText.hidden = false; }
@@ -428,4 +463,4 @@ if (params.has('fly')) { // ?fly=x,y,z,yaw,pitch: a free camera for looking at t
 }
 renderer.setAnimationLoop(frame);
 if (params.has('grabtest')) import('./dev-grab-test.js').then(m => m.grabTest({ params, hands, rig, camera, grab, boardMesh, board: () => board, freeze: () => { frozen = true; } }));
-window.__sand = { course, look, scene, renderer, get board() { return board; }, get mode() { return mode; }, camera, rig, BOARD }; // dev: for screenshots and tuning a look live
+window.__sand = { course, look, scene, renderer, get board() { return board; }, get mode() { return mode; }, camera, rig, BOARD, sparks }; // dev: for screenshots and tuning a look live

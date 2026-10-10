@@ -3,6 +3,7 @@
 import { createCourse } from '../src/course.js';
 import { COURSES } from '../src/courses/index.js';
 import { rideCourse } from '../src/ride-sim.js';
+import { railProblems } from '../src/rails.js';
 
 const ids = process.argv.slice(2);
 const defs = ids.length ? ids.map(id => { const d = COURSES.find(c => c.id === id); if (!d) throw new Error(`No course "${id}". Known: ${COURSES.map(c => c.id).join(', ')}`); return d; }) : COURSES;
@@ -31,6 +32,16 @@ for (const def of defs) {
   }
   for (const a of stand.airs) if (a.impact > 13) console.log(`  - hard landing at ${a.s.toFixed(0)} m (${a.air.toFixed(1)} s of air, ${a.impact.toFixed(0)} m/s into the ground): lengthen or steepen that landing`);
   c.kickers.forEach((k, i) => { if (!stand.airs.some(a => a.s > k && a.s < k + c.kickerReach[i])) flag(`no air off the kicker at ${k.toFixed(0)} m: too slow there, or the lip doesn't point up enough`); });
+  // Rails: each one against the rules, then a rider lined up on it from 45 m back (it should be caught at the start and ride it out).
+  for (const [i, rail] of c.rails.entries()) {
+    const label = `rail ${i} (${rail.from.toFixed(0)}-${rail.to.toFixed(0)} m, ${rail.length.toFixed(0)} m of bar)`;
+    for (const problem of railProblems(rail, c)) flag(`${label}: ${problem}`);
+    const r = rideCourse(c, { from: rail.from - 45, until: rail.to + 30, speed: 12, offset: s => rail.offsetAt(s) });
+    const mine = r.grinds.filter(g => g.rail === i), caught = mine.find(g => g.phase === 'start'), left = mine.find(g => g.phase === 'end');
+    if (!caught) flag(`${label}: a rider lined up on it was never caught`);
+    else if (!left || left.reason !== 'end') flag(`${label}: the rider left it by ${left?.reason ?? 'never leaving'}`);
+    else console.log(`${label}: caught at ${caught.s.toFixed(0)} m, ground ${left.distance.toFixed(0)} m in ${left.time.toFixed(1)} s`);
+  }
   for (let s = c.startS; s < c.finishS; s += 0.5) {
     if (c.features.some(f => s > f.from - 2 && s < f.to + 2)) continue;
     const p = c.pointAt(s), n = c.normalAt(p.x, p.z), slope = Math.acos(n.y) * 57.3;

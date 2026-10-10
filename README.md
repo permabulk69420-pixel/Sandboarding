@@ -12,6 +12,15 @@ Sandboarding down desert mountains in VR (WebXR, three.js, Vite). Every run is p
 | `nocturne` | Nocturne | A 3.5 km moonlit run, the flowing one: a serpent of banked S-bends, a rhythm line of five kickers, a tight canyon gate, long sweepers and a leap toward the moon. |
 | `mirage` | Mirage | A 4.5 km run over white gypsum dunes at noon, the fast and open one: wide sweepers, a field of long swells, three step-up jumps of growing size, a dry wash to clear and a steep sprint into a long leap. Far pools of mirage shimmer on the dune sea. |
 
+## Rails
+
+Every run has a few steel rails beside the lane. Ride up the striped ramp at the start of one, or jump onto it from anywhere along its length,
+and you grind: the bar carries you the way it runs, with sparks, a rasp of steel and a buzz in both controllers, and gravity and the bar's slick
+friction are all that act on you (no steering: you're on a rail). Hop off with A (hold it to charge a bigger pop) or ride off the end, where
+the bar sinks back into the sand. A rail catches you if you are within a metre of it, coming down onto it (not rising through it), travelling
+roughly along it (within 45 degrees), faster than a walk and not upside down; the rest of your speed is turned along the bar. The finish sign
+adds up how far you ground. Stand-alone physics: `src/rails.js` (the bars) and `src/board.js` (the grind).
+
 ## Working on it
 
 ```
@@ -37,7 +46,12 @@ partway down the run), `?time=<seconds>` (freeze the sky's clock, for repeatable
    very dark look like Nocturne's or a very bright one like Mirage's). Besides colours, a look can set `sunBand` (the pale band over the sun),
    `sunSize`, `starFrom` (how far up the sky the stars start), `fogDensity`/`fogHeight`, `exposure`, and `mirage` (0 to 1: far level ground
    turns to wobbling pools that mirror the sky).
-5. Scenery goes in `landmarks` (see `src/landmarks.js`): hoodoos, fins and buttes placed by `s`, `side` and `out` from the run, standing
+5. Rails go in `rails`: `{ from, to, offset }` in metres along the run and metres right of the centre line (negative is left), optionally
+   `height` (the top of the bar above the sand, 0.7), `entry` and `exit` (the lengths of the ramps, 5). Keep them off the racing line (6.5 m
+   or more), inside the lane, and clear of kickers, gaps, rollers and side hits; `railProblems` in `src/rails.js` checks all of that, the tests
+   run it on every rail, and they ride a simulated rider onto each rail to make sure it can be reached and ridden to the end. A rail is built
+   over the ground as it is and follows it, so it is best where the lane is smooth: banked bends and steep walls make for a hard approach.
+6. Scenery goes in `landmarks` (see `src/landmarks.js`): hoodoos, fins and buttes placed by `s`, `side` and `out` from the run, standing
    `height` above the lane there, or, for far mountains on a run that drops a long way, by absolute `at: [x, z]` and `top`.
    Nothing beside the lane is visible below the lane's own height, so near formations have to be tall.
 
