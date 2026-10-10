@@ -7,5 +7,5 @@ export default defineConfig({
   define: { __BUILD_ID__: JSON.stringify(BUILD_ID) },
   base: './',
   server: { host: '0.0.0.0', port: 4173 },
-  build: { target: 'es2022', chunkSizeWarningLimit: 900 },
+  build: { target: 'es2022', chunkSizeWarningLimit: 1000 },
 });

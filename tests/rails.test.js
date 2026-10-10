@@ -61,21 +61,25 @@ test('the rails and sparks build into scenery without a browser', async () => {
   const THREE = await import('three');
   const { createCourse } = await import('../src/course.js');
   const { COURSES } = await import('../src/courses/index.js');
-  const { createRails } = await import('../src/rails-view.js');
+  const { createRails, railBarGeometry } = await import('../src/rails-view.js');
   const { createSparks } = await import('../src/sparks.js');
   for (const def of COURSES) {
     const course = createCourse(def);
     const group = createRails(course);
-    const names = group.children.map(c => c.name);
-    assert.equal(names.filter(n => n === 'Rail bar').length, course.rails.length, `${def.id}: one bar per rail`);
-    assert.equal(names.filter(n => n === 'Rail ramp').length, course.rails.length * 2, `${def.id}: a ramp at each end`);
-    assert.ok(names.includes('Rail posts'), `${def.id}: posts`);
-    const bars = group.children.filter(c => c.name === 'Rail bar');
-    bars.forEach((bar, i) => {
-      const rail = course.rails[i], box = new THREE.Box3().setFromObject(bar);
+    // however many rails a run has, they are drawn in five calls: the pieces of every rail are merged
+    const names = group.children.map(c => c.name).sort();
+    assert.deepEqual(names, ['Rail bars', 'Rail flags', 'Rail poles', 'Rail posts', 'Rail ramps'], `${def.id}: bars, ramps, posts, poles and flags, one mesh each`);
+    const all = new THREE.Box3().setFromObject(group.children.find(c => c.name === 'Rail bars'));
+    course.rails.forEach((rail, i) => {
+      const box = new THREE.Box3().setFromBufferAttribute(railBarGeometry(rail).getAttribute('position'));
       assert.ok(box.min.x < rail.minX && box.max.x > rail.maxX - 1e-6 && box.min.z < rail.minZ && box.max.z > rail.maxZ - 1e-6, `${def.id} rail ${i}: the bar covers the rail`);
       assert.ok(box.max.y > rail.maxY - 0.2 && box.max.y < rail.maxY + 0.05, `${def.id} rail ${i}: the bar rides just under the board's line`);
+      assert.ok(all.containsBox(box), `${def.id} rail ${i}: it is part of the merged bars`);
     });
+    const poles = group.children.find(c => c.name === 'Rail poles');
+    assert.equal(poles.count, course.rails.length * 2, `${def.id}: a pole at each end of each rail`);
+    const flags = group.children.find(c => c.name === 'Rail flags');
+    assert.equal(flags.geometry.getAttribute('position').count, course.rails.length * 2 * 3, `${def.id}: a flag on each pole`);
   }
   const sparks = createSparks({});
   sparks.emit(0, 0, 0, 1, 1, 1, { count: 5 });
