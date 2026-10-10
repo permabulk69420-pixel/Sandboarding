@@ -64,6 +64,7 @@ export function createHandleHold() {
   const nq = new THREE.Quaternion(), align = new THREE.Quaternion(), ps = new THREE.Vector3(), handleQ = new THREE.Quaternion();
   const inward = new THREE.Vector3(), palm = new THREE.Vector3(), anchorQ = new THREE.Quaternion(), roll = new THREE.Quaternion(), cross = new THREE.Vector3();
   const scratchP = new THREE.Vector3(), scratchS = new THREE.Vector3();
+  const wristUp = new THREE.Vector3(), wristAt = new THREE.Vector3(), scratchM = new THREE.Matrix4();
   const wrist = new THREE.Vector3(), knuckleA = new THREE.Vector3(), knuckleB = new THREE.Vector3(), tip = new THREE.Vector3(), toAnchor = new THREE.Matrix4();
 
   // Which way the palm faces, in the hand anchor's own space, measured from the posed hand: square to the plane through the wrist and the
@@ -96,7 +97,9 @@ export function createHandleHold() {
     // box: x = out, y = along, z = across; then move it so it starts at the origin and runs outward
     geometry.translate(width / 2, 0, 0);
     geometry.applyMatrix4(new THREE.Matrix4().makeBasis(out, new THREE.Vector3(0, 1, 0), across));
-    const mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false }));
+    const show = typeof location !== 'undefined' && location.search.includes('showgrip'); // dev: see the plate the hand is fitted to
+    const mesh = new THREE.Mesh(geometry, show ? new THREE.MeshBasicMaterial({ color: 0xff2020, transparent: true, opacity: 0.6 })
+      : new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false }));
     mesh.name = 'Handle hold plate';
     mesh.userData.handleHold = true;
     mesh.userData.plateOut = out.toArray();
@@ -185,6 +188,17 @@ export function createHandleHold() {
         nq.premultiply(roll);
       }
       want.compose(p, nq, s);
+      // A hand reaching for an edge comes from the `wristSide` (the top of a board): if this fit would put the wrist on the other side,
+      // turn it over about the inward direction (the edge runs the other way, the plate still runs inward).
+      if (hold.handle.wristSide) {
+        wristUp.fromArray(hold.handle.wristSide).applyQuaternion(handleQ);
+        wristAt.setFromMatrixPosition(scratchM.multiplyMatrices(want, mat));
+        if (wristAt.sub(p).dot(wristUp) < 0) {
+          roll.setFromAxisAngle(inward, Math.PI);
+          nq.premultiply(roll);
+          want.compose(p, nq, s);
+        }
+      }
     }
     // and the hand model where that puts it
     want.multiply(mat);

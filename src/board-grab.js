@@ -90,7 +90,7 @@ export function createBoardGrab({ hands, boardMesh }) {
     marker.updateMatrixWorld(true);
     marker.getWorldPosition(mark);
     if (mark.distanceTo(socket) > GRAB.maxLift + GRAB.reach) { marker.removeFromParent(); return false; }
-    if (!hold.grab(state, { node: marker, axis, halfLength: 0, plate: GRAB.plate, inward })) { marker.removeFromParent(); return false; }
+    if (!hold.grab(state, { node: marker, axis, halfLength: 0, plate: GRAB.plate, inward, wristSide: [0, 1, 0] })) { marker.removeFromParent(); return false; }
     grabs.set(state, { part, name: names[part](state.handedness), marker, time: 0, inward });
     pulseHaptics(state, 0.5, 45);
     return true;
