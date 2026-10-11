@@ -93,6 +93,8 @@ if (!params.has('nolodge')) {
 const puffs = createSandPuffs({ scene, sun: sunUniform, heightAt: course.heightAt, dust: look.dust, dustLight: look.dustLight });
 const sparks = createSparks({ scene });
 const audio = createRideAudio();
+// Each run starts on its own track, then the playlist rolls on to the next one when it ends.
+audio.music(['heatwave', 'rebellion', 'punk-rock'].map(name => `${BASE}music/${name}.mp3`), runNumber - 1);
 const input = createInput();
 const hands = createVRHands({ renderer, scene, parent: rig });
 const grab = createBoardGrab({ hands, boardMesh });

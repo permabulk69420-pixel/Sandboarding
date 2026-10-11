@@ -1,8 +1,10 @@
-// All sound is made on the fly from filtered noise, so there is nothing to download and nothing to license:
-// wind that roars with speed, the hiss of the board on sand, a thump when you land, and on a rail the rasp of steel and a clang as you hit it.
+// The effects are made on the fly from filtered noise, so there is nothing to download and nothing to license:
+// wind that roars with speed, the hiss of the board on sand, a thump when you land, and on a rail the rasp of steel and a clang as you hit it. The soundtrack is the only thing loaded from files (public/music).
 
 export function createRideAudio() {
-  let ctx = null, wind = null, hiss = null, scrape = null, master = null;
+  let ctx = null, wind = null, hiss = null, scrape = null, master = null, musicGain = null;
+  let playlist = [], track = 0, musicSource = null, musicWanted = false;
+  const decoded = new Map(); // url -> Promise<AudioBuffer>
 
   function noiseBuffer(seconds = 2) {
     const buf = ctx.createBuffer(1, ctx.sampleRate * seconds, ctx.sampleRate);
@@ -26,6 +28,7 @@ export function createRideAudio() {
     if (!AC) return;
     ctx = new AC();
     master = ctx.createGain(); master.gain.value = 0.9; master.connect(ctx.destination);
+    musicGain = ctx.createGain(); musicGain.gain.value = 0.4; musicGain.connect(ctx.destination);
     wind = loop('bandpass', 500, 0.7);
     hiss = loop('highpass', 2400, 0.4);
     // The grind: a band of noise that sings with speed, roughened by a fast flutter so it rasps like metal under a board.
@@ -34,6 +37,33 @@ export function createRideAudio() {
     const depth = ctx.createGain(); depth.gain.value = 0;
     flutter.connect(depth).connect(scrape.gain.gain); flutter.start();
     scrape.flutter = flutter; scrape.depth = depth;
+    if (musicWanted) nextTrack(0);
+  }
+
+  // Music is decoded and played through Web Audio rather than an <audio> tag, so the browser does not pop up its media player.
+  function decode(url) {
+    if (!decoded.has(url)) decoded.set(url, fetch(url).then(r => r.arrayBuffer()).then(b => ctx.decodeAudioData(b)));
+    return decoded.get(url);
+  }
+
+  // Plays the tracks one after another, forever, starting at `first`. Safe to call before start(); it begins once the first click has happened.
+  function music(urls, first = 0) {
+    playlist = urls; track = first % urls.length; musicWanted = urls.length > 0;
+    if (ctx && musicWanted) nextTrack(0);
+  }
+
+  function nextTrack(step = 1) {
+    if (!ctx || !musicWanted) return;
+    track = (track + step) % playlist.length;
+    const url = playlist[track], mine = {};
+    musicSource = mine;
+    decode(url).then(buffer => {
+      if (musicSource !== mine) return;
+      const src = ctx.createBufferSource(); src.buffer = buffer; src.connect(musicGain);
+      src.onended = () => { if (musicSource === mine) nextTrack(1); };
+      mine.node = src; src.start();
+      if (playlist.length > 1) decode(playlist[(track + 1) % playlist.length]).catch(() => {}); // warm up the next one
+    }).catch(error => { decoded.delete(url); console.warn('music', error); });
   }
 
   // speed in m/s, grounded: on the sand, carve: 0..1 how hard you are turning, grinding: on a rail (the sand is silent then),
@@ -90,5 +120,5 @@ export function createRideAudio() {
 
   function silence() { if (ctx) update(0, false); }
 
-  return { start, update, thump, chime, clang, silence };
+  return { start, update, thump, chime, clang, silence, music };
 }
