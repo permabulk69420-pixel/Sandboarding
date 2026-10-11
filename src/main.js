@@ -15,6 +15,7 @@ import { createVRHands } from './hands.js';
 import { createSandPuffs } from './sand-puffs.js';
 import { pulseHaptics } from './haptics.js';
 import { createBoardGrab } from './board-grab.js';
+import { createBoardCarry } from './board-carry.js';
 import { createRails } from './rails-view.js';
 import { createSparks } from './sparks.js';
 
@@ -98,6 +99,7 @@ audio.music(['heatwave', 'rebellion', 'punk-rock'].map(name => `${BASE}music/${n
 const input = createInput();
 const hands = createVRHands({ renderer, scene, parent: rig });
 const grab = createBoardGrab({ hands, boardMesh });
+const carry = createBoardCarry({ scene, hands, boardMesh, groundAt: (x, z) => groundAt(x, z) });
 let frozen = false; // dev only (?grabtest): the board hangs where it is
 
 // Signs in the world: one beside the start gate, one past the finish.
@@ -133,6 +135,7 @@ const frozenTime = params.has('time') ? Number(params.get('time')) || 0 : null; 
 const groundAt = (x, z) => lodge?.floorAt(x, z) ?? course.heightAt(x, z); // on foot: the cabin's floor where there is one
 
 function placeOnSummit() {
+  carry.reset();
   const p = course.pointAt(Math.max(0, course.startS - 26));
   if (lodge) { p.x = lodge.spawn.x; p.z = lodge.spawn.z; p.yaw = lodge.spawn.yaw; }
   rig.position.set(p.x, groundAt(p.x, p.z), p.z);
@@ -152,6 +155,7 @@ function boardAt(s, speed) {
 }
 
 function dropIn() {
+  carry.reset();
   boardAt(course.startS, 0);
   // Keep your real feet over the board: remember where your head is in the play space now.
   headOffset.set(renderer.xr.isPresenting ? camera.position.x : 0, renderer.xr.isPresenting ? camera.position.z : 0);
@@ -303,8 +307,12 @@ function frame(time) {
     const g = course.pointAt(course.startS);
     camera.getWorldPosition(headWorld);
     const near = Math.hypot(headWorld.x - g.x, headWorld.z - g.z) < 7;
-    startSign.draw([{ text: `Run ${runNumber} · ${course.name}`, size: 0.3, bold: true }, { text: near ? 'Press A to drop in' : 'Walk up to the gate', size: 0.24, colour: '#9fe0ff' }, { text: `Best ${formatTime(store.best)}`, size: 0.2, colour: '#ffd7a8' }]);
-    if (near && inp.a) fadeThen(dropIn);
+    const withBoard = carry.state !== 'ground', canHop = carry.canHopOn(headWorld);
+    startSign.draw([{ text: `Run ${runNumber} · ${course.name}`, size: 0.3, bold: true }, { text: near ? (!withBoard && canHop ? 'A to hop on your board' : 'Press A to drop in') : 'Walk up to the gate', size: 0.24, colour: '#9fe0ff' }, { text: `Best ${formatTime(store.best)}`, size: 0.2, colour: '#ffd7a8' }]);
+    // A: hop on a board lying by your feet; otherwise (board in hand, under you, or out of reach) drop in at the gate. B: hop off.
+    if (inp.a && !withBoard && canHop) carry.hopOn(headWorld, rigYaw);
+    else if (inp.a && near) fadeThen(dropIn);
+    if (inp.b) carry.hopOff();
   } else if (mode !== 'fly') {
     if (mode === 'countdown') {
       const before = Math.ceil(countdown);
@@ -467,6 +475,7 @@ function frame(time) {
 
   // Grabs: the board comes up to a squeezing hand in the air (after the physics has placed it), then the hands are fitted onto it.
   const riding = mode === 'ride' || mode === 'finished';
+  if (mode === 'summit') { camera.getWorldPosition(headWorld); carry.update(dt, headWorld, rigYaw); } else carry.reset();
   if (riding) grab.update(dt, mode === 'ride' && !board.grounded); else if (grab.holding()) grab.releaseAll();
   hands.update(dt);
   grab.place();

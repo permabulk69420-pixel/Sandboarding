@@ -13,10 +13,9 @@ import { pulseHaptics } from './haptics.js';
 export const GRAB = Object.freeze({
   squeezeOn: 0.6, // grip button travel that starts a grab...
   squeezeOff: 0.35, // ...and that ends one (a little lower, so it doesn't flicker)
-  maxLift: 0.85, // metres the board can come up toward your hand
-  reach: 0.3, // and how far your hand can still be from the edge after that
+  maxLift: 0.45, // metres the board can come up toward your hand (a tuck of the knees, not a yank across the room)
+  reach: 0.15, // and how far your hand can still be from the edge after that: so your hand has to be within 0.6 m of the part you grab
   follow: 16, // per second: how quickly the board comes up (and settles back when you let go)
-  noseFrom: 0.4, // metres from the middle along the board past which a grab is the nose or tail
   between: 0.17, // side grabs sit between the bindings, within this of the middle
   plate: Object.freeze({ thickness: 0.016, width: 0.1 }), // the edge is held as a plate this thick (the deck), the fingers on one face
 });
@@ -71,18 +70,17 @@ export function createBoardGrab({ hands, boardMesh }) {
     hold.realSocket(state, socket);
     boardMesh.updateMatrixWorld(true);
     local.copy(socket).applyMatrix4(toBoard.copy(boardMesh.matrixWorld).invert());
-    let part, point, axis, inward;
-    if (Math.abs(local.z) > GRAB.noseFrom) {
-      const sign = Math.sign(local.z);
-      part = sign < 0 ? 'nose' : 'tail';
-      point = shape.tip(sign, THREE.MathUtils.clamp(local.x, -0.07, 0.07));
-      axis = [1, 0, 0]; inward = [0, 0, -sign];
-    } else {
-      const sign = local.x >= 0 ? 1 : -1;
-      part = sign > 0 ? 'right' : 'left';
-      point = shape.side(sign, THREE.MathUtils.clamp(local.z, -GRAB.between, GRAB.between));
-      axis = [0, 0, 1]; inward = [-sign, 0, 0];
-    }
+    // Grab whichever part your hand is actually closest to: the nose, the tail, or the side edge level with your hand (between the bindings).
+    const cx = THREE.MathUtils.clamp(local.x, -0.07, 0.07), cz = THREE.MathUtils.clamp(local.z, -GRAB.between, GRAB.between);
+    const options = [
+      { part: 'nose', point: shape.tip(-1, cx), axis: [1, 0, 0], inward: [0, 0, 1] },
+      { part: 'tail', point: shape.tip(1, cx), axis: [1, 0, 0], inward: [0, 0, -1] },
+      { part: 'right', point: shape.side(1, cz), axis: [0, 0, 1], inward: [-1, 0, 0] },
+      { part: 'left', point: shape.side(-1, cz), axis: [0, 0, 1], inward: [1, 0, 0] },
+    ];
+    let best = options[0], bestD = Infinity;
+    for (const o of options) { const d = o.point.distanceTo(local); if (d < bestD) { bestD = d; best = o; } }
+    const { part, point, axis, inward } = best;
     const marker = new THREE.Object3D();
     marker.name = `Grab ${part}`;
     marker.position.copy(point);
